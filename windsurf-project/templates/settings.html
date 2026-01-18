@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        .settings-card { background:#fff; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.1); padding:16px; }
+        .row { margin-bottom:14px; }
+        label { display:block; font-weight:600; margin-bottom:6px; color:#444; }
+        select, input[type="text"], input[type="number"] { width:100%; padding:8px; border:1px solid #e1e4e8; border-radius:6px; }
+        .keys-section { margin-top:8px; }
+        .key-item { display:grid; grid-template-columns: 1fr auto auto; gap:8px; align-items:center; margin-bottom:12px; padding:8px; background:#f8f9fa; border-radius:4px; }
+        .key-item input.key-input { width:100%; }
+        .muted { color:#666; font-size:13px; }
+        .actions { display:flex; gap:8px; margin-top:12px; }
+        .topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }
+        .link { color:#4a6fa5; text-decoration:none; }
+        .link:hover { text-decoration:underline; }
+        .hidden { display:none; }
+        .status { font-size:13px; }
+        .provider-note { margin-top:6px; }
+        .inline { display:flex; align-items:center; gap:8px; }
+        .grid { display:grid; gap:10px; }
+        .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .small { font-size:12px; color:#555; }
+        .indented { margin-left: 24px; padding-left: 16px; border-left: 3px solid #e1e4e8; }
+    </style>
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <div class="navbar-container">
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a href="{{ url_for('index') }}" class="nav-link">
+                        <i class="fas fa-folder-open"></i> File Explorer
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="{{ url_for('jobs_page') }}" class="nav-link">
+                        <i class="fas fa-tasks"></i> Job Queue
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="{{ url_for('settings_page') }}" class="nav-link active">
+                        <i class="fas fa-cog"></i> Settings
+                    </a>
+                </li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="settings-card">
+            <div class="row" style="border-bottom: 2px solid #e1e4e8; padding-bottom: 16px; margin-bottom: 16px;">
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <button id="exportSettingsBtn" class="btn" type="button" title="Download settings.json">
+                        <i class="fas fa-download"></i> Export Settings
+                    </button>
+                    <button id="importSettingsBtn" class="btn" type="button" title="Upload settings.json">
+                        <i class="fas fa-upload"></i> Import Settings
+                    </button>
+                    <input type="file" id="importSettingsFile" accept=".json" style="display: none;" />
+                    <span id="importStatusMsg" class="status muted" style="margin-left: 8px;"></span>
+                </div>
+                <div class="small muted" style="margin-top: 8px;">
+                    Export your current settings to a JSON file or import settings from a previously exported file.
+                </div>
+            </div>
+            <div class="row">
+                <label for="rootDirInput">Root directory to monitor</label>
+                <input id="rootDirInput" type="text" placeholder="/absolute/path/to/folder" />
+                <div class="small muted">Provide an absolute path. The file observer will switch to this folder.</div>
+            </div>
+            <div class="row">
+                <label for="vpnConfigDirInput">Directory with all Mullvad VPN configs</label>
+                <input id="vpnConfigDirInput" type="text" placeholder="/path/to/mullvad/configs" />
+                <div class="small muted">Directory containing .conf files. Each API key will be assigned a unique VPN config.</div>
+            </div>
+            <div class="row">
+                <label for="excludedFileTypesInput">Excluded file types (comma-separated)</label>
+                <input id="excludedFileTypesInput" type="text" placeholder=".xml, .json, .png, .jpg" />
+                <div class="small muted">File types to hide in the file explorer. Include the dot (e.g., .xml, .json).</div>
+            </div>
+            <div class="row">
+                <label for="maxParallelJobsInput">Maximum parallel jobs</label>
+                <input id="maxParallelJobsInput" type="number" min="1" max="10" step="1" value="2" disabled style="background-color: #f5f5f5; cursor: not-allowed;" />
+                <div class="small muted">Number of jobs that can run simultaneously in the job queue. (Currently not editable)</div>
+            </div>
+            <div class="row">
+                <label for="translationTargetLanguageInput">Translation target language</label>
+                <input id="translationTargetLanguageInput" type="text" placeholder="e.g. en, de, fr..." />
+            </div>
+            
+            <div class="row">
+                <label for="ocrSourceLanguageInput">OCR source language</label>
+                <input id="ocrSourceLanguageInput" type="text" placeholder="e.g. en, de, fr..." />
+                <div class="small muted">Language code (3 letters) for OCR when converting SUP/SUB files to SRT format.</div>
+            </div>
+            
+            <div class="row">
+                <label for="extractionSourceLanguageInput">Extraction source language</label>
+                <input id="extractionSourceLanguageInput" type="text" placeholder="e.g. en, de, fr..." />
+                <div class="small muted">Language code (3 letters) for extracting embedded subtitles from video files.</div>
+            </div>
+            
+            <div class="row">
+                <label for="subtitleSearchLanguagesInput">Subtitle search languages (comma-separated)</label>
+                <input id="subtitleSearchLanguagesInput" type="text" placeholder="e.g. en, de, fr..." disabled style="background-color:#f5f5f5; cursor:not-allowed;" />
+                <div class="small muted">Language codes for automatic subtitle search (currently fixed).</div>
+            </div>
+
+            <div class="row">
+                <label for="subtitleMaxDownloadsInput">Maximum subtitles to download per video</label>
+                <input id="subtitleMaxDownloadsInput" type="number" min="1" max="5" step="1" value="1" disabled style="background-color:#f5f5f5; cursor:not-allowed;" />
+                <div class="small muted">Number of best-matching subtitles to download next to each video (currently fixed).</div>
+            </div>
+            
+            <hr style="margin: 20px 0; border: none; border-top: 1px solid #e1e4e8;" />
+            
+            <h4 style="margin-bottom: 12px;">Subtitle Search Providers</h4>
+            
+            <div class="row">
+                <label>
+                    <input type="checkbox" id="opensubtitlesEnabled" style="width: auto; margin-right: 8px;" />
+                    Enable OpenSubtitles.com
+                </label>
+                <div class="small muted" style="margin-left: 24px;">Sign up at <a href="https://www.opensubtitles.com" target="_blank">opensubtitles.com</a></div>
+            </div>
+            <div class="row indented" id="opensubtitlesConfig" style="display: none;">
+                <div style="margin-bottom: 8px;">
+                    <label for="opensubtitlesUsername">Username</label>
+                    <input id="opensubtitlesUsername" type="text" placeholder="OpenSubtitles username" />
+                </div>
+                <div>
+                    <label for="opensubtitlesPassword">Password</label>
+                    <input id="opensubtitlesPassword" type="password" placeholder="OpenSubtitles password" />
+                </div>
+            </div>
+            
+            <div class="row">
+                <label>
+                    <input type="checkbox" id="addic7edEnabled" style="width: auto; margin-right: 8px;" disabled />
+                    Enable Addic7ed
+                </label>
+                <div class="small muted" style="margin-left: 24px;">Addic7ed configuration is currently locked.</div>
+            </div>
+            <div class="row indented" id="addic7edConfig" style="display: none;">
+                <div style="margin-bottom: 8px;">
+                    <label for="addic7edUsername">Username</label>
+                    <input id="addic7edUsername" type="text" placeholder="Addic7ed username" disabled style="background-color:#f5f5f5; cursor:not-allowed;" />
+                </div>
+                <div>
+                    <label for="addic7edPassword">Password</label>
+                    <input id="addic7edPassword" type="password" placeholder="Addic7ed password" disabled style="background-color:#f5f5f5; cursor:not-allowed;" />
+                </div>
+            </div>
+            
+            <hr style="margin: 20px 0; border: none; border-top: 1px solid #e1e4e8;" />
+            
+            <h4 style="margin-bottom: 12px;">Translation Settings</h4>
+            
+            <div class="row inline">
+                <input type="checkbox" id="autoSwitchOnError" />
+                <label for="autoSwitchOnError" style="margin:0; font-weight:500;">Automatically switch provider on error</label>
+            </div>
+
+            <div class="row">
+                <label for="providerSelect">Provider</label>
+                <select id="providerSelect"></select>
+                <div class="provider-note muted">DeepL and Azure support saving multiple API keys.</div>
+            </div>
+
+            <div class="row indented">
+                <label for="waitMsInput">Wait after each translation request (ms)</label>
+                <input id="waitMsInput" type="number" min="0" step="1" value="0" />
+                <div class="small muted">This value applies to the currently selected provider only.</div>
+            </div>
+
+            <div id="azureContainer" class="hidden indented">
+                <div class="row">
+                    <label for="azureEndpointInput">Azure Endpoint</label>
+                    <input id="azureEndpointInput" type="text" placeholder="https://api.cognitive.microsofttranslator.com" />
+                    <div class="small muted">Azure Cognitive Services endpoint URL.</div>
+                </div>
+                <div class="row">
+                    <label for="azureRegionInput">Azure Region</label>
+                    <input id="azureRegionInput" type="text" placeholder="eastus" />
+                    <div class="small muted">Azure region code (e.g., eastus, westus2, etc.).</div>
+                </div>
+            </div>
+
+            <div id="keysContainer" class="keys-section hidden indented">
+                <div class="row">
+                    <label id="keysLabel">API Keys</label>
+                    <div class="small muted">Mark exactly one API key as active. Each key must have a unique VPN config assigned (1:1 relation).</div>
+                    <div id="keysList"></div>
+                    <button id="addKeyBtn" class="btn" type="button"><i class="fas fa-plus"></i> Add Key</button>
+                </div>
+                <div class="row">
+                    <label for="retryDaysInput">On error disable API key for X days</label>
+                    <input id="retryDaysInput" type="number" min="0" step="1" value="0" />
+                </div>
+                <div class="row inline">
+                    <input type="checkbox" id="autoChangeKeyOnError" />
+                    <label for="autoChangeKeyOnError" style="margin:0; font-weight:500;">Automatically change API key on error</label>
+                </div>
+            </div>
+
+            <div class="actions">
+                <button id="saveBtn" class="btn" type="button"><i class="fas fa-save"></i> Save</button>
+                <span id="statusMsg" class="status muted"></span>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+</body>
+</html>

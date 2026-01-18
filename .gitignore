@@ -1,0 +1,9 @@
+jobs.db
+settings.json
+settings.json.backup
+
+__pycache__/
+**/__pycache__/
+
+venv/
+**/venv/

@@ -1,0 +1,45 @@
+services:
+  # Main application - subtitle processing web interface
+  subtitle-app:
+    build:
+      context: ./windsurf-project
+      dockerfile: Dockerfile
+      args:
+        TESSDATA_DOWNLOAD: ${TESSDATA_DOWNLOAD:-0}
+        TESSDATA_LANGS: ${TESSDATA_LANGS:-}
+        TESSDATA_REPO_RAW_BASE: ${TESSDATA_REPO_RAW_BASE:-https://raw.githubusercontent.com/tesseract-ocr/tessdata/main}
+    image: subtitle-app:latest
+    container_name: subtitle-app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-5000}:5000"
+    volumes:
+      # Mount media directory (adjust this path to your actual media location)
+      - ${MEDIA_DIR:-/media}:/media
+      # Persist settings - bind mount to keep settings on host
+      - ./windsurf-project/settings.json:/app/settings.json
+      # Mount Mullvad VPN configs if needed
+      - ${MULLVAD_VPN_DIR:-./mullvad_wireguard_linux_all}:/vpn-configs:ro
+      # Mount source code for development (no rebuild needed!)
+      - ./windsurf-project/src:/app/src
+      - ./windsurf-project/templates:/app/templates
+      - ./windsurf-project/static:/app/static
+    environment:
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - FLASK_DEBUG=${FLASK_DEBUG:-0}
+      - HOST_MEDIA_DIR=${MEDIA_DIR:-/media}
+      - MULLVAD_VPN_DIR=${MULLVAD_VPN_DIR:-./mullvad_wireguard_linux_all}
+      - OCR_WORKERS=${OCR_WORKERS:-2}
+      - TESSERACT_TIMEOUT_SECONDS=${TESSERACT_TIMEOUT_SECONDS:-120}
+    networks:
+      - subtitle-network
+    # Privileged mode and capabilities for VPN (WireGuard) support
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    #user: root
+
+networks:
+  subtitle-network:
+    driver: bridge

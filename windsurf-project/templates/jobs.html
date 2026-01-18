@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Queue</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        .jobs-container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .link { color: #4a6fa5; text-decoration: none; }
+        .link:hover { text-decoration: underline; }
+        .job-section { margin-bottom: 30px; background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .job-section h2 { margin-bottom: 15px; color: #333; font-size: 20px; }
+        .job-table { width: 100%; border-collapse: collapse; }
+        .job-table th { text-align: left; padding: 10px; background: #f8f9fa; border-bottom: 2px solid #e1e4e8; font-weight: 600; font-size: 14px; }
+        .job-table td { padding: 10px; border-bottom: 1px solid #e1e4e8; font-size: 14px; }
+        .job-table tr:hover { background: #f8f9fa; }
+        .status-badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-running { background: #cfe2ff; color: #004085; }
+        .status-completed { background: #d1e7dd; color: #0f5132; }
+        .status-failed { background: #f8d7da; color: #842029; }
+        .status-timeout { background: #ffecb5; color: #664d03; }
+        .job-actions { display: flex; gap: 8px; }
+        .btn-small { padding: 4px 8px; font-size: 12px; border: none; border-radius: 4px; cursor: pointer; }
+        .btn-delete { background: #dc3545; color: white; }
+        .btn-delete:hover { background: #c82333; }
+        .empty-state { text-align: center; padding: 40px; color: #666; }
+        .refresh-info { font-size: 13px; color: #666; margin-top: 10px; }
+        .error-message { color: #842029; background: #f8d7da; padding: 8px; border-radius: 4px; margin-top: 5px; font-size: 13px; word-break: break-word; }
+    </style>
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <div class="navbar-container">
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a href="{{ url_for('index') }}" class="nav-link">
+                        <i class="fas fa-folder-open"></i> File Explorer
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="{{ url_for('jobs_page') }}" class="nav-link active">
+                        <i class="fas fa-tasks"></i> Job Queue
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="{{ url_for('settings_page') }}" class="nav-link">
+                        <i class="fas fa-cog"></i> Settings
+                    </a>
+                </li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="jobs-container">
+        <div class="topbar" style="justify-content: flex-end;">
+            <button id="refreshBtn" class="btn"><i class="fas fa-rotate"></i> Refresh</button>
+        </div>
+
+        <!-- Running Jobs -->
+        <div class="job-section">
+            <h2><i class="fas fa-play-circle"></i> Running Jobs (<span id="runningCount">0</span>)</h2>
+            <div id="runningJobs">
+                <div class="empty-state">No jobs currently running</div>
+            </div>
+        </div>
+
+        <!-- Pending Jobs -->
+        <div class="job-section">
+            <h2><i class="fas fa-clock"></i> Pending Jobs (<span id="pendingCount">0</span>)</h2>
+            <div id="pendingJobs">
+                <div class="empty-state">No pending jobs</div>
+            </div>
+        </div>
+
+        <!-- Failed Jobs (Last Hour) -->
+        <div class="job-section">
+            <h2><i class="fas fa-exclamation-triangle"></i> Failed Jobs - Last Hour (<span id="failedCount">0</span>)</h2>
+            <div id="failedJobs">
+                <div class="empty-state">No failed jobs in the last hour</div>
+            </div>
+        </div>
+
+        <div class="refresh-info">
+            <i class="fas fa-info-circle"></i> Page auto-refreshes every 5 seconds
+        </div>
+    </div>
+
+    <script>
+        let autoRefreshInterval;
+
+        function formatDate(isoString) {
+            if (!isoString) return '-';
+            const date = new Date(isoString);
+            return date.toLocaleString();
+        }
+
+        function getStatusBadge(status) {
+            const statusClass = `status-${status}`;
+            return `<span class="status-badge ${statusClass}">${status.toUpperCase()}</span>`;
+        }
+
+        function renderJobTable(jobs, showActions = false) {
+            if (!jobs || jobs.length === 0) {
+                return '<div class="empty-state">No jobs</div>';
+            }
+
+            let html = '<table class="job-table"><thead><tr>';
+            html += '<th>ID</th><th>Type</th><th>File</th><th>Status</th><th>Created</th><th>Started</th><th>Completed</th>';
+            if (showActions) html += '<th>Actions</th>';
+            html += '</tr></thead><tbody>';
+
+            jobs.forEach(job => {
+                html += '<tr>';
+                html += `<td>${job.id}</td>`;
+                html += `<td>${job.job_type}</td>`;
+                html += `<td title="${job.file_path}">${job.file_path.split('/').pop()}</td>`;
+                html += `<td>${getStatusBadge(job.status)}</td>`;
+                html += `<td>${formatDate(job.created_at)}</td>`;
+                html += `<td>${formatDate(job.started_at)}</td>`;
+                html += `<td>${formatDate(job.completed_at)}</td>`;
+                
+                if (showActions) {
+                    html += '<td class="job-actions">';
+                    if (job.status === 'pending') {
+                        html += `<button class="btn-small btn-delete" onclick="deleteJob(${job.id})"><i class="fas fa-trash"></i> Delete</button>`;
+                    }
+                    html += '</td>';
+                }
+                html += '</tr>';
+
+                // Show error message if failed
+                if (job.error_message) {
+                    html += `<tr><td colspan="${showActions ? 8 : 7}"><div class="error-message"><strong>Error:</strong> ${escapeHtml(job.error_message)}</div></td></tr>`;
+                }
+            });
+
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function loadJobs() {
+            try {
+                const res = await fetch('/api/jobs');
+                const data = await res.json();
+
+                // Update counts
+                document.getElementById('runningCount').textContent = data.running.length;
+                document.getElementById('pendingCount').textContent = data.pending.length;
+                document.getElementById('failedCount').textContent = data.failed.length;
+
+                // Render tables
+                document.getElementById('runningJobs').innerHTML = renderJobTable(data.running);
+                document.getElementById('pendingJobs').innerHTML = renderJobTable(data.pending, true);
+                document.getElementById('failedJobs').innerHTML = renderJobTable(data.failed);
+            } catch (error) {
+                console.error('Failed to load jobs:', error);
+            }
+        }
+
+        async function deleteJob(jobId) {
+            if (!confirm('Delete this job?')) return;
+            
+            try {
+                const res = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+                const data = await res.json();
+                
+                if (data.ok) {
+                    loadJobs(); // Refresh
+                } else {
+                    alert('Failed to delete job: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error deleting job:', error);
+                alert('Failed to delete job');
+            }
+        }
+
+        document.getElementById('refreshBtn').addEventListener('click', loadJobs);
+
+        // Initial load
+        loadJobs();
+
+        // Auto-refresh every 5 seconds
+        autoRefreshInterval = setInterval(loadJobs, 5000);
+    </script>
+</body>
+</html>
