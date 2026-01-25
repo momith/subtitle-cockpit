@@ -1,0 +1,46 @@
+{
+  "root_dir": "/media",
+  "mullvad_vpn_config_dir": "",
+  "excluded_file_types": "",
+  "max_parallel_jobs": 2,
+  "subtitle_max_downloads": 1,
+  "provider": "DeepL",
+  "translation_target_language": "th",
+  "ocr_source_language": "deu",
+  "extraction_source_language": "eng",
+  "subtitle_search_languages": [
+    "en"
+  ],
+  "subtitle_providers": {
+    "opensubtitles": {
+      "enabled": false,
+      "username": "",
+      "password": ""
+    },
+    "addic7ed": {
+      "enabled": false,
+      "username": "",
+      "password": ""
+    }
+  },
+  "auto_switch_on_error": false,
+  "azure_endpoint": "https://api.cognitive.microsofttranslator.com",
+  "azure_region": "eastus",
+  "wait_ms": {
+    "GoogleTranslate": 0,
+    "DeepL": 0,
+    "Azure": 0
+  },
+  "retry_after_days": {
+    "DeepL": 0,
+    "Azure": 0
+  },
+  "auto_change_key_on_error": {
+    "DeepL": false,
+    "Azure": false
+  },
+  "provider_keys": {
+    "DeepL": [],
+    "Azure": []
+  }
+}
