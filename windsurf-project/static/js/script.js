@@ -584,6 +584,26 @@ document.addEventListener('DOMContentLoaded', function() {
         translateBtn.addEventListener('click', () => {
             if (translateBtn.disabled) return;
             const srts = Array.from(selectedFiles);
+            const thresholdBytes = 500 * 1024;
+            const largeSrts = srts
+                .map(p => ({
+                    path: p,
+                    item: currentItems.find(it => it.path === p)
+                }))
+                .filter(x => x.item && typeof x.item.size === 'number' && x.item.size >= thresholdBytes);
+            if (largeSrts.length > 0) {
+                const list = largeSrts
+                    .slice(0, 10)
+                    .map(x => `- ${x.path} (${formatFileSize(x.item.size)})`)
+                    .join('\n');
+                const suffix = largeSrts.length > 10 ? `\n...and ${largeSrts.length - 10} more.` : '';
+                const ok = confirm(
+                    `One or more selected SRT files are large (>= ${formatFileSize(thresholdBytes)}).\n\n` +
+                    `Large files may take a long time to translate and can consume a lot of API quota.\n\n` +
+                    `${list}${suffix}\n\nProceed and add to the translation queue?`
+                );
+                if (!ok) return;
+            }
             (async () => {
                 try {
                     const res = await fetch('/api/translate', {

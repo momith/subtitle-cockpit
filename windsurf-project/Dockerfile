@@ -59,12 +59,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
          fi; \
      fi
 
+# Install system-level dependencies for building Python packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libtesseract-dev \
+    libleptonica-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 # Set working directory
 WORKDIR /app
 
+# Upgrade pip and install build essentials
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --retries 10 --timeout 60 -r requirements.txt
 
 # Copy application files
 COPY src/ ./src/

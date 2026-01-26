@@ -194,6 +194,22 @@
                 </div>
             </div>
 
+            <div id="deeplContainer" class="hidden indented">
+                <div class="row">
+                    <label for="deeplEndpointInput">DeepL Endpoint</label>
+                    <input id="deeplEndpointInput" type="text" placeholder="https://api-free.deepl.com/v2/translate" />
+                    <div class="small muted">Use https://api-free.deepl.com/v2/translate for free tier or https://api.deepl.com/v2/translate for pro.</div>
+                </div>
+            </div>
+
+            <div id="geminiContainer" class="hidden indented">
+                <div class="row">
+                    <label for="geminiModelInput">Gemini Model</label>
+                    <input id="geminiModelInput" type="text" placeholder="gemini-2.0-flash" />
+                    <div class="small muted">Model name for Gemini API (e.g., gemini-2.0-flash, gemini-2.5-flash, gemini-2.0-pro).</div>
+                </div>
+            </div>
+
             <div id="keysContainer" class="keys-section hidden indented">
                 <div class="row">
                     <label id="keysLabel">API Keys</label>

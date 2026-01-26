@@ -32,7 +32,7 @@ if not os.path.exists(BASE_DIR):
     BASE_DIR = os.path.expanduser('~')
 app.config['BASE_DIR'] = BASE_DIR
 SETTINGS_FILE = os.path.join(parent_dir, 'settings.json')
-ALLOWED_PROVIDERS = ["GoogleTranslate", "DeepL", "Azure"]
+ALLOWED_PROVIDERS = ["DeepL", "Azure", "Gemini"]
 OBSERVER = None
 OBSERVED_PATH = None
 
@@ -67,7 +67,7 @@ def init_job_queue():
     """Initialize job queue with settings from config"""
     global job_queue
     settings = read_settings()
-    max_parallel = settings.get('max_parallel_jobs', 2)
+    max_parallel = settings.get('max_parallel_jobs', 1)
     job_queue = get_job_queue(max_parallel=max_parallel)
     return job_queue
 
@@ -149,12 +149,14 @@ def _default_settings():
         'root_dir': app.config.get('BASE_DIR') or os.path.expanduser('~'),
         'mullvad_vpn_config_dir': '',
         'excluded_file_types': '',
-        'max_parallel_jobs': 2,
+        'max_parallel_jobs': 1,
         'subtitle_max_downloads': 1,
-        'provider': 'GoogleTranslate',
+        'provider': 'DeepL',
         'translation_target_language': '',
         'ocr_source_language': 'eng',
         'extraction_source_language': 'eng',
+        'gemini_model': 'gemini-2.0-flash',
+        'deepl_endpoint': 'https://api-free.deepl.com/v2/translate',
         # Subtitle search defaults
         'subtitle_search_languages': ['en'],
         'subtitle_providers': {
@@ -173,11 +175,12 @@ def _default_settings():
         'azure_endpoint': 'https://api.cognitive.microsofttranslator.com',
         'azure_region': 'eastus',
         'wait_ms': {p: 0 for p in ALLOWED_PROVIDERS},
-        'retry_after_days': {'DeepL': 0, 'Azure': 0},
-        'auto_change_key_on_error': {'DeepL': False, 'Azure': False},
+        'retry_after_days': {'DeepL': 0, 'Azure': 0, 'Gemini': 0},
+        'auto_change_key_on_error': {'DeepL': False, 'Azure': False, 'Gemini': False},
         'provider_keys': {
             'DeepL': [],
-            'Azure': []
+            'Azure': [],
+            'Gemini': []
         }
     }
 
@@ -237,10 +240,14 @@ def read_settings():
             # Azure-specific settings
             azure_endpoint = str(data.get('azure_endpoint', base['azure_endpoint']))
             azure_region = str(data.get('azure_region', base['azure_region']))
+            # DeepL-specific settings
+            deepl_endpoint = str(data.get('deepl_endpoint', base.get('deepl_endpoint', 'https://api-free.deepl.com/v2/translate')))
             # Provider
             provider = data.get('provider') if data.get('provider') in ALLOWED_PROVIDERS else base['provider']
             # Languages (migrate old key target_language -> translation_target_language)
             translation_target_language = str(data.get('translation_target_language') or data.get('target_language') or base['translation_target_language'])
+            # Gemini-specific settings
+            gemini_model = str(data.get('gemini_model', base.get('gemini_model', 'gemini-2.0-flash')))
             # OCR source language
             ocr_source_language = str(data.get('ocr_source_language', base.get('ocr_source_language', 'eng')))
             # Extraction source language
@@ -283,7 +290,7 @@ def read_settings():
             # retry_after_days
             retry_after_days = base['retry_after_days']
             if isinstance(data.get('retry_after_days'), dict):
-                for p in ['DeepL', 'Azure']:
+                for p in ['DeepL', 'Azure', 'Gemini']:
                     try:
                         retry_after_days[p] = int(data['retry_after_days'].get(p, 0))
                     except Exception:
@@ -291,15 +298,16 @@ def read_settings():
             # auto_change_key_on_error
             auto_change_key_on_error = base['auto_change_key_on_error']
             if isinstance(data.get('auto_change_key_on_error'), dict):
-                for p in ['DeepL', 'Azure']:
+                for p in ['DeepL', 'Azure', 'Gemini']:
                     auto_change_key_on_error[p] = bool(data['auto_change_key_on_error'].get(p, False))
             # provider_keys with migration
             pk = data.get('provider_keys') if isinstance(data.get('provider_keys'), dict) else {}
             deepL_keys = _normalize_keys_list(pk.get('DeepL', []))
             azure_keys = _normalize_keys_list(pk.get('Azure', []))
+            gemini_keys = _normalize_keys_list(pk.get('Gemini', []))
             # New settings
             excluded_file_types = str(data.get('excluded_file_types', base.get('excluded_file_types', '')))
-            max_parallel_jobs = int(data.get('max_parallel_jobs', base.get('max_parallel_jobs', 2)))
+            max_parallel_jobs = int(data.get('max_parallel_jobs', base.get('max_parallel_jobs', 1)))
             subtitle_max_downloads = int(data.get('subtitle_max_downloads', base.get('subtitle_max_downloads', 1)))
             return {
                 'root_dir': root_dir,
@@ -311,6 +319,8 @@ def read_settings():
                 'translation_target_language': translation_target_language,
                 'ocr_source_language': ocr_source_language,
                 'extraction_source_language': extraction_source_language,
+                'gemini_model': gemini_model,
+                'deepl_endpoint': deepl_endpoint,
                 'subtitle_search_languages': subtitle_search_languages,
                 'subtitle_providers': subtitle_providers,
                 'auto_switch_on_error': auto_switch,
@@ -321,7 +331,8 @@ def read_settings():
                 'auto_change_key_on_error': auto_change_key_on_error,
                 'provider_keys': {
                     'DeepL': deepL_keys,
-                    'Azure': azure_keys
+                    'Azure': azure_keys,
+                    'Gemini': gemini_keys
                 }
             }
     except Exception:
@@ -348,11 +359,11 @@ def api_settings():
     # Merge with existing settings so unspecified providers keep their settings
     existing = read_settings()
     # Normalize keys payload (list of dicts or strings)
-    keys_data = existing.get('provider_keys', {'DeepL': [], 'Azure': []})
+    keys_data = existing.get('provider_keys', {'DeepL': [], 'Azure': [], 'Gemini': []})
     if not isinstance(keys_data, dict):
-        keys_data = {'DeepL': [], 'Azure': []}
+        keys_data = {'DeepL': [], 'Azure': [], 'Gemini': []}
     if isinstance(provider_keys, dict):
-        for k in ['DeepL', 'Azure']:
+        for k in ['DeepL', 'Azure', 'Gemini']:
             v = provider_keys.get(k, None)
             if v is not None:
                 keys_data[k] = _normalize_keys_list(v)
@@ -369,18 +380,18 @@ def api_settings():
             except Exception:
                 pass
     retry_payload = payload.get('retry_after_days', {})
-    retry_after_days = existing.get('retry_after_days', {'DeepL': 0, 'Azure': 0})
+    retry_after_days = existing.get('retry_after_days', {'DeepL': 0, 'Azure': 0, 'Gemini': 0})
     if isinstance(retry_payload, dict):
-        for p in ['DeepL', 'Azure']:
+        for p in ['DeepL', 'Azure', 'Gemini']:
             try:
                 if p in retry_payload:
                     retry_after_days[p] = int(retry_payload[p])
             except Exception:
                 pass
     auto_change_payload = payload.get('auto_change_key_on_error', {})
-    auto_change_key_on_error = existing.get('auto_change_key_on_error', {'DeepL': False, 'Azure': False})
+    auto_change_key_on_error = existing.get('auto_change_key_on_error', {'DeepL': False, 'Azure': False, 'Gemini': False})
     if isinstance(auto_change_payload, dict):
-        for p in ['DeepL', 'Azure']:
+        for p in ['DeepL', 'Azure', 'Gemini']:
             if p in auto_change_payload:
                 auto_change_key_on_error[p] = bool(auto_change_payload[p])
 
@@ -396,10 +407,16 @@ def api_settings():
     azure_endpoint = str(payload.get('azure_endpoint', existing.get('azure_endpoint', 'https://api.cognitive.microsofttranslator.com')))
     azure_region = str(payload.get('azure_region', existing.get('azure_region', 'eastus')))
 
+    # DeepL-specific settings
+    deepl_endpoint = str(payload.get('deepl_endpoint', existing.get('deepl_endpoint', _default_settings().get('deepl_endpoint', 'https://api-free.deepl.com/v2/translate'))))
+    if not deepl_endpoint:
+        deepl_endpoint = existing.get('deepl_endpoint', _default_settings().get('deepl_endpoint', 'https://api-free.deepl.com/v2/translate'))
+
     # Languages
     translation_target_language = str(payload.get('translation_target_language', existing.get('translation_target_language', existing.get('target_language', ''))))
     ocr_source_language = str(payload.get('ocr_source_language', existing.get('ocr_source_language', 'eng')))
     extraction_source_language = str(payload.get('extraction_source_language', existing.get('extraction_source_language', 'eng')))
+    gemini_model = str(payload.get('gemini_model', existing.get('gemini_model', _default_settings().get('gemini_model', 'gemini-2.0-flash'))))
     # Subtitle search languages (accept list or comma-separated string)
     sub_langs_payload = payload.get('subtitle_search_languages', existing.get('subtitle_search_languages', ['en']))
     subtitle_search_languages: list[str]
@@ -430,7 +447,7 @@ def api_settings():
     
     # File exclusions and job settings
     excluded_file_types = str(payload.get('excluded_file_types', existing.get('excluded_file_types', '')))
-    max_parallel_jobs = int(payload.get('max_parallel_jobs', existing.get('max_parallel_jobs', 2)))
+    max_parallel_jobs = int(payload.get('max_parallel_jobs', existing.get('max_parallel_jobs', 1)))
     if max_parallel_jobs < 1:
         max_parallel_jobs = 1
     elif max_parallel_jobs > 10:
@@ -449,6 +466,8 @@ def api_settings():
         'translation_target_language': translation_target_language,
         'ocr_source_language': ocr_source_language,
         'extraction_source_language': extraction_source_language,
+        'gemini_model': gemini_model,
+        'deepl_endpoint': deepl_endpoint,
         'subtitle_search_languages': subtitle_search_languages,
         'subtitle_providers': subtitle_providers,
         'auto_switch_on_error': auto_switch_on_error,
@@ -495,7 +514,7 @@ def list_vpn_configs():
     # Build map of which configs are assigned
     assigned = {}
     provider_keys = settings.get('provider_keys', {})
-    for provider in ['DeepL', 'Azure']:
+    for provider in ['DeepL', 'Azure', 'Gemini']:
         keys = provider_keys.get(provider, [])
         if isinstance(keys, list):
             for key_obj in keys:
@@ -615,12 +634,20 @@ def download_file():
         
         if os.path.isdir(target_path):
             return jsonify({'error': 'Cannot download directories'}), 400
-        
+
+        download_name = os.path.basename(target_path)
+        ext = os.path.splitext(download_name)[1].lower()
+        mimetype = None
+        if ext in {'.srt', '.ass', '.ssa'}:
+            mimetype = 'text/plain'
+
         # Send file for download
         return send_file(
             target_path,
             as_attachment=True,
-            download_name=os.path.basename(target_path)
+            download_name=download_name,
+            mimetype=mimetype,
+            max_age=0,
         )
         
     except Exception as e:
@@ -937,7 +964,7 @@ def _translate_file_with_failover(file_path, settings, base_dir, vpn_dir, target
     """
     from datetime import datetime, timedelta
     
-    provider = settings.get('provider', 'GoogleTranslate')
+    provider = settings.get('provider', 'DeepL')
     max_attempts = 2  # Try current provider, then one fallback
     
     for attempt in range(max_attempts):
@@ -945,7 +972,7 @@ def _translate_file_with_failover(file_path, settings, base_dir, vpn_dir, target
         provider_keys = settings.get('provider_keys', {})
         active_key_info = None
         
-        if provider in ['DeepL', 'Azure']:
+        if provider in ['DeepL', 'Azure', 'Gemini']:
             keys_list = provider_keys.get(provider, [])
             if not isinstance(keys_list, list) or len(keys_list) == 0:
                 return False, f'No API keys configured for {provider}'
@@ -974,7 +1001,7 @@ def _translate_file_with_failover(file_path, settings, base_dir, vpn_dir, target
         # Try to switch API key or provider
         switched = False
         
-        if provider in ['DeepL', 'Azure'] and active_key_info:
+        if provider in ['DeepL', 'Azure', 'Gemini'] and active_key_info:
             auto_change_key = settings.get('auto_change_key_on_error', {}).get(provider, False)
             if auto_change_key:
                 new_settings = _switch_to_next_api_key(updated_settings, provider)
@@ -1173,14 +1200,12 @@ def _switch_to_next_api_key(settings, provider):
 
 def _get_next_provider(current_provider):
     """Get next provider in rotation"""
-    if current_provider == 'GoogleTranslate':
-        return 'Gemini'
-    elif current_provider == 'Gemini':
+    if current_provider == 'Gemini':
         return 'DeepL'
     elif current_provider == 'DeepL':
         return 'Azure'
     elif current_provider == 'Azure':
-        return 'GoogleTranslate'
+        return 'Gemini'
     return None
 
 def _srt_timestamp(seconds: float) -> str:

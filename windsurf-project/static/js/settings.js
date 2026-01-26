@@ -17,6 +17,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const azureContainer = document.getElementById('azureContainer');
   const azureEndpointInput = document.getElementById('azureEndpointInput');
   const azureRegionInput = document.getElementById('azureRegionInput');
+  const deeplContainer = document.getElementById('deeplContainer');
+  const deeplEndpointInput = document.getElementById('deeplEndpointInput');
+  const geminiContainer = document.getElementById('geminiContainer');
+  const geminiModelInput = document.getElementById('geminiModelInput');
   const subtitleSearchLanguagesInput = document.getElementById('subtitleSearchLanguagesInput');
   const subtitleMaxDownloadsInput = document.getElementById('subtitleMaxDownloadsInput');
   const ocrSourceLanguageInput = document.getElementById('ocrSourceLanguageInput');
@@ -35,10 +39,10 @@ document.addEventListener('DOMContentLoaded', () => {
   let availableVpnConfigs = []; // List of available .conf files
   let assignedVpnConfigs = {}; // Map of config -> {provider, key}
   // Cache edited keys per provider locally to preserve when switching providers
-  let editedKeys = { DeepL: [], Azure: [] }; // array of {value, active, last_usage, last_error, last_error_at, vpn_config}
+  let editedKeys = { DeepL: [], Azure: [], Gemini: [] }; // array of {value, active, last_usage, last_error, last_error_at, vpn_config}
   let editedWaitMs = {}; // provider -> ms
-  let editedRetryDays = { DeepL: 0, Azure: 0 };
-  let editedAutoChangeOnError = { DeepL: false, Azure: false };
+  let editedRetryDays = { DeepL: 0, Azure: 0, Gemini: 0 };
+  let editedAutoChangeOnError = { DeepL: false, Azure: false, Gemini: false };
 
   function setStatus(msg, timeout=2000) {
     statusMsg.textContent = msg;
@@ -54,11 +58,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize local cache with saved settings BEFORE rendering
     editedKeys = {
       DeepL: Array.isArray(savedKeys.DeepL) ? savedKeys.DeepL.map(copyKeyObj) : [],
-      Azure: Array.isArray(savedKeys.Azure) ? savedKeys.Azure.map(copyKeyObj) : []
+      Azure: Array.isArray(savedKeys.Azure) ? savedKeys.Azure.map(copyKeyObj) : [],
+      Gemini: Array.isArray(savedKeys.Gemini) ? savedKeys.Gemini.map(copyKeyObj) : []
     };
     editedWaitMs = Object.assign({}, currentSettings.wait_ms || {});
-    editedRetryDays = Object.assign({ DeepL: 0, Azure: 0 }, currentSettings.retry_after_days || {});
-    editedAutoChangeOnError = Object.assign({ DeepL: false, Azure: false }, currentSettings.auto_change_key_on_error || {});
+    editedRetryDays = Object.assign({ DeepL: 0, Azure: 0, Gemini: 0 }, currentSettings.retry_after_days || {});
+    editedAutoChangeOnError = Object.assign({ DeepL: false, Azure: false, Gemini: false }, currentSettings.auto_change_key_on_error || {});
     renderProviders();
     // root dir
     rootDirInput.value = currentSettings.root_dir || '';
@@ -71,6 +76,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Azure settings
     azureEndpointInput.value = currentSettings.azure_endpoint || 'https://api.cognitive.microsofttranslator.com';
     azureRegionInput.value = currentSettings.azure_region || 'eastus';
+    if (deeplEndpointInput) {
+      deeplEndpointInput.value = currentSettings.deepl_endpoint || 'https://api-free.deepl.com/v2/translate';
+    }
+    if (geminiModelInput) {
+      geminiModelInput.value = currentSettings.gemini_model || 'gemini-2.0-flash';
+    }
     // languages
     translationTargetLanguageInput.value = currentSettings.translation_target_language || currentSettings.target_language || '';
     // OCR source language
@@ -120,7 +131,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function providerSupportsKeys(provider) {
-    return provider === 'DeepL' || provider === 'Azure';
+    return provider === 'DeepL' || provider === 'Azure' || provider === 'Gemini';
   }
 
   async function loadVpnConfigs() {
@@ -186,6 +197,18 @@ document.addEventListener('DOMContentLoaded', () => {
     // Show/hide Azure-specific settings
     const isAzure = provider === 'Azure';
     azureContainer.classList.toggle('hidden', !isAzure);
+
+    // Show/hide DeepL-specific settings
+    const isDeepL = provider === 'DeepL';
+    if (deeplContainer) {
+      deeplContainer.classList.toggle('hidden', !isDeepL);
+    }
+
+    // Show/hide Gemini-specific settings
+    const isGemini = provider === 'Gemini';
+    if (geminiContainer) {
+      geminiContainer.classList.toggle('hidden', !isGemini);
+    }
     
     if (!show) return;
 
@@ -380,6 +403,8 @@ document.addEventListener('DOMContentLoaded', () => {
       max_parallel_jobs: currentSettings.max_parallel_jobs || 2, // Keep existing value (field is disabled)
       azure_endpoint: (azureEndpointInput.value || '').trim(),
       azure_region: (azureRegionInput.value || '').trim(),
+      deepl_endpoint: (deeplEndpointInput ? ((deeplEndpointInput.value || '').trim() || 'https://api-free.deepl.com/v2/translate') : 'https://api-free.deepl.com/v2/translate'),
+      gemini_model: (geminiModelInput ? ((geminiModelInput.value || '').trim() || 'gemini-2.0-flash') : 'gemini-2.0-flash'),
       translation_target_language: (translationTargetLanguageInput.value || '').trim(),
       ocr_source_language: (ocrSourceLanguageInput ? ocrSourceLanguageInput.value : '').trim() || 'eng',
       extraction_source_language: (extractionSourceLanguageInput ? extractionSourceLanguageInput.value : '').trim() || 'eng',
@@ -404,7 +429,8 @@ document.addEventListener('DOMContentLoaded', () => {
       auto_change_key_on_error: editedAutoChangeOnError,
       provider_keys: {
         DeepL: editedKeys.DeepL.map(copyKeyObj),
-        Azure: editedKeys.Azure.map(copyKeyObj)
+        Azure: editedKeys.Azure.map(copyKeyObj),
+        Gemini: editedKeys.Gemini.map(copyKeyObj)
       }
     };
     try {
@@ -419,11 +445,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // Sync cache with saved settings
         editedKeys = {
           DeepL: Array.isArray(currentSettings?.provider_keys?.DeepL) ? currentSettings.provider_keys.DeepL.map(copyKeyObj) : [],
-          Azure: Array.isArray(currentSettings?.provider_keys?.Azure) ? currentSettings.provider_keys.Azure.map(copyKeyObj) : []
+          Azure: Array.isArray(currentSettings?.provider_keys?.Azure) ? currentSettings.provider_keys.Azure.map(copyKeyObj) : [],
+          Gemini: Array.isArray(currentSettings?.provider_keys?.Gemini) ? currentSettings.provider_keys.Gemini.map(copyKeyObj) : []
         };
         editedWaitMs = Object.assign({}, currentSettings.wait_ms || {});
-        editedRetryDays = Object.assign({ DeepL: 0, Azure: 0 }, currentSettings.retry_after_days || {});
-        editedAutoChangeOnError = Object.assign({ DeepL: false, Azure: false }, currentSettings.auto_change_key_on_error || {});
+        editedRetryDays = Object.assign({ DeepL: 0, Azure: 0, Gemini: 0 }, currentSettings.retry_after_days || {});
+        editedAutoChangeOnError = Object.assign({ DeepL: false, Azure: false, Gemini: false }, currentSettings.auto_change_key_on_error || {});
         autoSwitchOnError.checked = !!currentSettings.auto_switch_on_error;
         // refresh wait ms input for currently selected provider
         waitMsInput.value = Number((currentSettings.wait_ms && currentSettings.wait_ms[providerSelect.value]) || 0);
@@ -436,6 +463,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         azureEndpointInput.value = currentSettings.azure_endpoint || 'https://api.cognitive.microsofttranslator.com';
         azureRegionInput.value = currentSettings.azure_region || 'eastus';
+        if (deeplEndpointInput) {
+          deeplEndpointInput.value = currentSettings.deepl_endpoint || 'https://api-free.deepl.com/v2/translate';
+        }
+        if (geminiModelInput) {
+          geminiModelInput.value = currentSettings.gemini_model || 'gemini-2.0-flash';
+        }
         await loadVpnConfigs();
         renderKeysSection();
         setStatus('Saved');
@@ -464,7 +497,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function validateVpnAssignments() {
     // Check that each VPN config is assigned to at most one API key across all providers
     const allAssignments = {};
-    for (const provider of ['DeepL', 'Azure']) {
+    for (const provider of ['DeepL', 'Azure', 'Gemini']) {
       const keys = editedKeys[provider] || [];
       for (const key of keys) {
         if (key.vpn_config) {

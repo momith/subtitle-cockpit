@@ -6,9 +6,11 @@ import time
 import logging
 import os
 import subprocess
+import json
+import re
 from typing import List, Optional
 from bs4 import BeautifulSoup
-import deepl
+import requests
 from azure.ai.translation.text import TextTranslationClient
 from azure.core.credentials import AzureKeyCredential
 
@@ -82,7 +84,16 @@ def stop_vpn() -> bool:
         return False
 
 
-def translate_texts_deepl(texts: List[str], target_lang: str, api_key: str) -> List[str]:
+def translate_texts_deepl(
+    texts: List[str],
+    target_lang: str,
+    api_key: str,
+    endpoint: str = "https://api-free.deepl.com/v2/translate",
+    context: str = "These are subtitles from a video file.",
+    batch_size: int = 50,
+    delay: float = 0.0,
+    max_retries: int = 5,
+) -> List[str]:
     """
     Translate texts using DeepL API.
     
@@ -94,19 +105,72 @@ def translate_texts_deepl(texts: List[str], target_lang: str, api_key: str) -> L
     Returns:
         List of translated text strings
     """
-    client = deepl.Translator(api_key)
-    
-    # Clean HTML tags from texts
-    cleaned = [BeautifulSoup(t, "html.parser").get_text() for t in texts]
-    
-    # Translate with context
-    responses = client.translate_text(
-        cleaned,
-        target_lang=target_lang.upper(),
-        context="These are subtitles from a video file."
-    )
-    
-    return [r.text for r in responses]
+    # DeepL can handle HTML if tag_handling is set; don't strip tags.
+    cleaned = [t if isinstance(t, str) else str(t) for t in texts]
+
+    url = endpoint.strip()
+    headers = {
+        "Authorization": f"DeepL-Auth-Key {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    def _post_with_retries(payload_obj: dict) -> dict:
+        last_exc: Optional[Exception] = None
+        for attempt in range(max_retries + 1):
+            try:
+                resp = requests.post(
+                    url,
+                    headers=headers,
+                    data=json.dumps(payload_obj, ensure_ascii=False),
+                    timeout=(10, 120),
+                )
+
+                if resp.status_code in (429, 500, 502, 503, 504):
+                    wait_s = min(60.0, max(1.0, (delay if delay and delay > 0 else 1.0)) * (2 ** attempt))
+                    body_preview = (resp.text or "").strip().replace("\n", " ")[:500]
+                    logging.warning(
+                        f"DeepL API returned HTTP {resp.status_code}. "
+                        f"Waiting {wait_s}s before retry {attempt + 1}/{max_retries}. Response: {body_preview}"
+                    )
+                    time.sleep(wait_s)
+                    continue
+
+                resp.raise_for_status()
+                return resp.json()
+
+            except Exception as e:
+                last_exc = e
+                wait_s = min(30.0, max(1.0, (delay if delay and delay > 0 else 1.0)) * (2 ** attempt))
+                logging.warning(
+                    f"DeepL request error: {e}. Waiting {wait_s}s before retry {attempt + 1}/{max_retries}."
+                )
+                time.sleep(wait_s)
+
+        raise RuntimeError(f"DeepL request failed after {max_retries} retries") from last_exc
+
+    translations: list[str] = []
+    for i in range(0, len(cleaned), max(1, int(batch_size))):
+        batch = cleaned[i:i + batch_size]
+        payload_obj = {
+            "text": batch,
+            "target_lang": target_lang.upper(),
+            "context": context,
+            "tag_handling": "html",
+            "split_sentences": "1",
+            "preserve_formatting": False,
+        }
+
+        data = _post_with_retries(payload_obj)
+        items = data.get("translations")
+        if not isinstance(items, list) or len(items) != len(batch):
+            raise ValueError(f"DeepL returned unexpected response shape: {data}")
+
+        translations.extend([str(x.get("text", "")) for x in items])
+
+        if i + batch_size < len(cleaned) and delay and delay > 0:
+            time.sleep(delay)
+
+    return translations
 
 
 def translate_texts_azure(
@@ -173,10 +237,185 @@ def translate_texts_azure(
             raise RuntimeError(f"Failed to translate batch after {max_retries} retries")
         
         # Sleep between batches (except after the last batch)
-        if i + batch_size < len(cleaned):
+        if i + batch_size < len(cleaned) and delay and delay > 0:
             time.sleep(delay)
     
     return all_translations
+
+
+def translate_texts_gemini(
+    texts: List[str],
+    target_lang: str,
+    api_key: str,
+    model_name: str = "gemini-2.0-flash",
+    batch_size: int = 50,
+    delay: float = 1.0,
+    max_retries: int = 6
+) -> List[str]:
+    try:
+        from google import genai
+        from google.genai import types
+    except Exception as e:
+        raise ImportError(
+            "Gemini provider requires the 'google-genai' package. "
+            "Install it with: pip install -U google-genai"
+        ) from e
+
+    cleaned = [BeautifulSoup(t, "html.parser").get_text() for t in texts]
+
+    def _clean_json_string(s: str) -> str:
+        s2 = (s or "").strip()
+        s2 = re.sub(r'^```(?:json)?\s*', '', s2, flags=re.IGNORECASE)
+        s2 = re.sub(r'\s*```\s*$', '', s2)
+        return s2.strip()
+
+    def _extract_json_payload(s: str) -> str:
+        s2 = _clean_json_string(s)
+        start = s2.find('[')
+        end = s2.rfind(']')
+        if start != -1 and end != -1 and end > start:
+            return s2[start:end + 1].strip()
+        return s2
+
+    def _normalize_translated_payload(payload, expected_len: int) -> list[str]:
+        if isinstance(payload, dict):
+            for k in ("translations", "items", "data", "result", "output"):
+                if isinstance(payload.get(k), list):
+                    payload = payload.get(k)
+                    break
+
+        if not isinstance(payload, list):
+            raise ValueError("Gemini returned non-list JSON")
+
+        if len(payload) != expected_len:
+            raise ValueError(f"Gemini returned {len(payload)} items instead of {expected_len}")
+
+        idx_to_text: dict[int, str] = {}
+        for pos, item in enumerate(payload):
+            if isinstance(item, str):
+                idx_to_text[pos] = item
+                continue
+
+            if not isinstance(item, dict):
+                raise ValueError("Gemini returned invalid item structure")
+
+            raw_idx = item.get("index")
+            idx = pos
+            if raw_idx is not None:
+                try:
+                    idx = int(str(raw_idx))
+                except Exception:
+                    idx = pos
+
+            content = item.get("content")
+            if content is None:
+                content = item.get("text")
+            if content is None:
+                content = item.get("translation")
+            if content is None and len(item) == 1:
+                content = next(iter(item.values()))
+            if content is None:
+                raise ValueError("Gemini returned invalid item structure")
+
+            idx_to_text[idx] = str(content)
+
+        if set(idx_to_text.keys()) != set(range(expected_len)):
+            ordered: list[str] = []
+            for item in payload:
+                if isinstance(item, str):
+                    ordered.append(item)
+                elif isinstance(item, dict):
+                    ordered.append(str(item.get("content") or item.get("text") or item.get("translation") or ""))
+                else:
+                    ordered.append("")
+            if len(ordered) != expected_len:
+                raise ValueError("Gemini returned unexpected indices")
+            return ordered
+
+        return [idx_to_text[i] for i in range(expected_len)]
+
+    system_text = (
+        f"You are an assistant that translates subtitles to {target_lang}.\n"
+        "You will receive a JSON list of objects with keys: index (string) and content (string).\n"
+        "The 'index' key is the index of the subtitle dialog.\n"
+        "The 'content' key is the dialog to be translated.\n"
+        "The indices must remain the same in the response as in the request.\n"
+        "Dialogs must be translated as they are without any changes.\n"
+        "If a line has a comma or multiple sentences, try to keep one line to about 40-50 characters.\n"
+        "Return ONLY valid JSON, with the exact same number of items as the request. No markdown, no explanations."
+    )
+
+    response_schema = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "index": {"type": "string"},
+                "content": {"type": "string"}
+            },
+            "required": ["index", "content"],
+            "additionalProperties": False
+        }
+    }
+
+    client = genai.Client(api_key=api_key)
+
+    def _call_with_retries(contents: str) -> str:
+        last_exc: Optional[Exception] = None
+        for attempt in range(max_retries + 1):
+            try:
+                resp = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_text,
+                        temperature=0,
+                        response_mime_type="application/json",
+                        response_json_schema=response_schema,
+                    ),
+                )
+                return resp.text or ""
+            except Exception as e:
+                last_exc = e
+                msg = str(e)
+                lower = msg.lower()
+                if "limit: 0" in lower or "billing" in lower or "check your plan" in lower:
+                    raise RuntimeError(
+                        "Gemini API quota is not available for this key/project. "
+                        "Enable billing / request quota in Google AI Studio for the Gemini API, "
+                        "or use a different key/project/model."
+                    ) from e
+                base = delay if delay and delay > 0 else 1.0
+                wait_s = min(60.0, base * (2 ** attempt))
+                logging.warning(
+                    f"Gemini request error: {e}. Waiting {wait_s}s before retry {attempt + 1}/{max_retries}."
+                )
+                time.sleep(wait_s)
+        raise RuntimeError(f"Gemini request failed after {max_retries} retries") from last_exc
+
+    results: list[str] = []
+    for i in range(0, len(cleaned), max(1, int(batch_size))):
+        batch = cleaned[i:i + batch_size]
+        user_json = json.dumps(
+            [{"index": str(j), "content": t} for j, t in enumerate(batch)],
+            ensure_ascii=False,
+        )
+
+        text = _call_with_retries(user_json)
+        json_text = _extract_json_payload(text)
+        try:
+            payload = json.loads(json_text)
+        except Exception as e:
+            preview = (text or "").strip().replace("\n", " ")[:500]
+            raise ValueError(f"Gemini returned non-JSON output: {e}. Output preview: {preview}")
+
+        translated_texts = _normalize_translated_payload(payload, expected_len=len(batch))
+        results.extend(translated_texts)
+
+        if i + batch_size < len(cleaned) and delay and delay > 0:
+            time.sleep(delay)
+
+    return results
 
 
 def translate_srt_file(
@@ -186,8 +425,10 @@ def translate_srt_file(
     provider: str,
     api_key: str,
     wait_ms: int = 1000,
+    deepl_endpoint: str = "https://api-free.deepl.com/v2/translate",
     azure_endpoint: str = "https://api.cognitive.microsofttranslator.com",
-    azure_region: str = "germanywestcentral"
+    azure_region: str = "germanywestcentral",
+    gemini_model: str = "gemini-2.0-flash"
 ) -> bool:
     """
     Translate an SRT subtitle file.
@@ -250,7 +491,13 @@ def translate_srt_file(
             delay_seconds = wait_ms / 1000.0
             
             if provider.lower() == "deepl":
-                translations = translate_texts_deepl(text_blocks, target_lang, api_key)
+                translations = translate_texts_deepl(
+                    text_blocks,
+                    target_lang,
+                    api_key,
+                    endpoint=deepl_endpoint,
+                    delay=delay_seconds,
+                )
             elif provider.lower() == "azure":
                 translations = translate_texts_azure(
                     text_blocks,
@@ -258,6 +505,14 @@ def translate_srt_file(
                     api_key,
                     endpoint=azure_endpoint,
                     region=azure_region,
+                    delay=delay_seconds
+                )
+            elif provider.lower() == "gemini":
+                translations = translate_texts_gemini(
+                    text_blocks,
+                    target_lang,
+                    api_key,
+                    model_name=gemini_model,
                     delay=delay_seconds
                 )
             else:
@@ -270,7 +525,7 @@ def translate_srt_file(
                 
         except Exception as e:
             logging.error(f"Translation failed: {e}")
-            return False
+            raise
     
     # Write translated file
     logging.info(f"Writing translated file: {output_path}")

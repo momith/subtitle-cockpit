@@ -510,8 +510,7 @@ class JobQueue:
     def _execute_translate(self, file_path: str, params: Dict) -> Dict:
         """Execute translation job
         
-        Translates SRT files using translation_providers.py with automatic failover,
-        or uses local GoogleTranslate implementation when that provider is selected.
+        Translates SRT files using translation_providers.py with automatic failover.
         """
         import json
         from datetime import datetime, timedelta
@@ -536,44 +535,24 @@ class JobQueue:
         else:
             raise RuntimeError('Settings file not found')
         
-        provider = settings.get('provider', 'GoogleTranslate')
-        
-        # Use local GoogleTranslate implementation if that provider is selected
-        if provider == 'GoogleTranslate':
-            # Generate output filename with target language code
-            base_name = os.path.splitext(file_path)[0]
-            ext = os.path.splitext(file_path)[1]
-            output_rel_path = f"{base_name}.{target_lang}{ext}"
-            output_abs_path = os.path.join(base_dir, output_rel_path)
-            
-            logging.info(f'Using local GoogleTranslate for {abs_path} -> {output_abs_path}')
-            success = self._translate_with_google_local(abs_path, output_abs_path, target_lang)
-            
-            if not success:
-                raise RuntimeError('Local GoogleTranslate translation failed')
-            
-            return {
-                'output_file': output_rel_path,
-                'message': f'Translation completed using local GoogleTranslate'
-            }
-        else:
-            # Use local translation providers (DeepL or Azure)
-            success, message = self._translate_with_failover(
-                file_path, settings, base_dir, target_lang, settings_file, vpn_dir
-            )
-            
-            if not success:
-                raise RuntimeError(f'Translation failed: {message}')
-            
-            # Generate output filename with target language code
-            base_name = os.path.splitext(file_path)[0]
-            ext = os.path.splitext(file_path)[1]
-            output_rel_path = f"{base_name}.{target_lang}{ext}"
-            
-            return {
-                'output_file': output_rel_path,
-                'message': message
-            }
+        provider = settings.get('provider', 'DeepL')
+
+        success, message = self._translate_with_failover(
+            file_path, settings, base_dir, target_lang, settings_file, vpn_dir
+        )
+
+        if not success:
+            raise RuntimeError(f'Translation failed: {message}')
+
+        # Generate output filename with target language code
+        base_name = os.path.splitext(file_path)[0]
+        ext = os.path.splitext(file_path)[1]
+        output_rel_path = f"{base_name}.{target_lang}{ext}"
+
+        return {
+            'output_file': output_rel_path,
+            'message': message
+        }
 
     def _execute_search_subtitles(self, file_path: str, params: Dict) -> Dict:
         """Execute online subtitle search/download job
@@ -706,7 +685,7 @@ class JobQueue:
         import json
         from translation_providers import translate_srt_file
         
-        provider = settings.get('provider', 'GoogleTranslate')
+        provider = settings.get('provider', 'DeepL')
         max_attempts = 2
         
         for attempt in range(max_attempts):
@@ -714,7 +693,7 @@ class JobQueue:
             provider_keys = settings.get('provider_keys', {})
             active_key_info = None
             
-            if provider in ['DeepL', 'Azure']:
+            if provider in ['DeepL', 'Azure', 'Gemini']:
                 keys_list = provider_keys.get(provider, [])
                 if not keys_list:
                     return False, f'No API keys configured for {provider}'
@@ -740,7 +719,7 @@ class JobQueue:
             # Handle failover - try next API key or provider
             switched = False
             
-            if provider in ['DeepL', 'Azure'] and active_key_info:
+            if provider in ['DeepL', 'Azure', 'Gemini'] and active_key_info:
                 auto_change = settings.get('auto_change_key_on_error', {}).get(provider, False)
                 if auto_change:
                     # Switch to next key
@@ -757,7 +736,7 @@ class JobQueue:
                 auto_switch_provider = settings.get('auto_switch_on_error', False)
                 if auto_switch_provider and attempt < max_attempts - 1:
                     # Switch provider
-                    providers = ['GoogleTranslate', 'DeepL', 'Azure']
+                    providers = ['DeepL', 'Azure', 'Gemini']
                     current_idx = providers.index(provider) if provider in providers else 0
                     next_provider = providers[(current_idx + 1) % len(providers)]
                     settings['provider'] = next_provider
@@ -805,6 +784,10 @@ class JobQueue:
         # Azure-specific settings
         azure_endpoint = settings.get('azure_endpoint', 'https://api.cognitive.microsofttranslator.com')
         azure_region = settings.get('azure_region', 'germanywestcentral')
+        # Gemini-specific settings
+        gemini_model = settings.get('gemini_model', 'gemini-2.0-flash')
+        # DeepL-specific settings
+        deepl_endpoint = settings.get('deepl_endpoint', 'https://api-free.deepl.com/v2/translate')
         
         try:
             # Start VPN if configured
@@ -823,8 +806,10 @@ class JobQueue:
                 provider=provider,
                 api_key=api_key,
                 wait_ms=wait_ms,
+                deepl_endpoint=deepl_endpoint,
                 azure_endpoint=azure_endpoint,
-                azure_region=azure_region
+                azure_region=azure_region,
+                gemini_model=gemini_model
             )
             
             if success:

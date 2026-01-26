@@ -7,12 +7,15 @@ Based on subliminal library
 
 import logging
 import os
+import tempfile
+from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from babelfish import Language
-import subliminal
-from subliminal import Video, Episode, Movie
-from subliminal.providers.opensubtitles import OpenSubtitlesProvider
-from subliminal.providers.addic7ed import Addic7edProvider
+from ass_cleaner import clean_ass_file
+#import subliminal
+#from subliminal import Video, Episode, Movie
+#from subliminal.providers.opensubtitles import OpenSubtitlesProvider
+#from subliminal.providers.addic7ed import Addic7edProvider
 
 logger = logging.getLogger(__name__)
 
@@ -59,83 +62,26 @@ def convert_ass_to_srt(content: bytes) -> bytes:
     Returns:
         SRT formatted subtitle content as bytes
     """
-    import re
-    
     try:
-        text = content.decode('utf-8', errors='ignore')
-        lines = text.split('\n')
-        
-        # Find the [Events] section
-        events_started = False
-        format_line = None
-        dialogue_lines = []
-        
-        for line in lines:
-            line = line.strip()
-            if line.lower() == '[events]':
-                events_started = True
-                continue
-            
-            if events_started:
-                if line.lower().startswith('format:'):
-                    format_line = line[7:].strip()
-                elif line.lower().startswith('dialogue:'):
-                    dialogue_lines.append(line[9:].strip())
-        
-        if not format_line or not dialogue_lines:
-            logger.warning('Could not parse ASS/SSA format properly')
-            return content
-        
-        # Parse format to find column indices
-        format_fields = [f.strip().lower() for f in format_line.split(',')]
-        try:
-            start_idx = format_fields.index('start')
-            end_idx = format_fields.index('end')
-            text_idx = format_fields.index('text')
-        except ValueError:
-            logger.warning('Could not find required fields in ASS/SSA format')
-            return content
-        
-        # Parse dialogue lines
-        subtitles = []
-        for dialogue in dialogue_lines:
-            parts = dialogue.split(',', len(format_fields) - 1)
-            if len(parts) < len(format_fields):
-                continue
-            
-            start_time = parts[start_idx].strip()
-            end_time = parts[end_idx].strip()
-            text = parts[text_idx].strip()
-            
-            # Remove ASS formatting tags like {\pos(x,y)}, {\an8}, etc.
-            text = re.sub(r'\{[^}]*\}', '', text)
-            # Replace \N with newline
-            text = text.replace('\\N', '\n').replace('\\n', '\n')
-            
-            # Convert time format from H:MM:SS.CC to HH:MM:SS,mmm
-            start_srt = convert_ass_time_to_srt(start_time)
-            end_srt = convert_ass_time_to_srt(end_time)
-            
-            if start_srt and end_srt and text:
-                subtitles.append({
-                    'start': start_srt,
-                    'end': end_srt,
-                    'text': text
-                })
-        
-        # Sort by start time
-        subtitles.sort(key=lambda x: x['start'])
-        
-        # Generate SRT format
-        srt_lines = []
-        for idx, sub in enumerate(subtitles, 1):
-            srt_lines.append(str(idx))
-            srt_lines.append(f"{sub['start']} --> {sub['end']}")
-            srt_lines.append(sub['text'])
-            srt_lines.append('')
-        
-        return '\n'.join(srt_lines).encode('utf-8')
-        
+        from pyasstosrt import Subtitle
+    except Exception as e:
+        logger.warning(f"pyasstosrt is not installed; cannot convert ASS/SSA to SRT: {e}")
+        return content
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ass_path = os.path.join(tmpdir, 'input.ass')
+            with open(ass_path, 'wb') as f:
+                f.write(content)
+
+            sub = Subtitle(ass_path, removing_effects=True)
+            sub.export(output_dir=tmpdir, encoding='utf-8')
+
+            srt_name = Path(ass_path).with_suffix('.srt').name
+            srt_path = os.path.join(tmpdir, srt_name)
+            with open(srt_path, 'rb') as f:
+                return f.read()
+
     except Exception as e:
         logger.exception(f'Error converting ASS/SSA to SRT: {e}')
         return content
@@ -207,6 +153,13 @@ class SubtitleSearcher:
         Returns:
             List of subtitle dictionaries with metadata
         """
+        try:
+            import subliminal
+        except Exception as e:
+            raise RuntimeError(
+                "Subtitle search requires the 'subliminal' package. Install it to use this feature."
+            ) from e
+
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"Video file not found: {video_path}")
         
@@ -307,6 +260,13 @@ class SubtitleSearcher:
         Returns:
             Path to downloaded subtitle file, or None if failed
         """
+        try:
+            import subliminal
+        except Exception as e:
+            raise RuntimeError(
+                "Subtitle download requires the 'subliminal' package. Install it to use this feature."
+            ) from e
+
         subtitle = subtitle_dict.get('subtitle_object')
         if not subtitle:
             logger.error('No subtitle object found in dictionary')
@@ -370,7 +330,15 @@ class SubtitleSearcher:
             if detected_format in ['ass', 'ssa']:
                 logger.info(f'Converting {detected_format.upper()} to SRT format')
                 try:
-                    srt_content = convert_ass_to_srt(subtitle.content)
+                    ass_content = subtitle.content
+                    if detected_format == 'ass':
+                        try:
+                            clean_ass_file(Path(output_path), Path(output_path))
+                            ass_content = Path(output_path).read_bytes()
+                        except Exception as e:
+                            logger.exception(f'Failed to clean ASS before conversion; converting original content: {e}')
+
+                    srt_content = convert_ass_to_srt(ass_content)
                     
                     # Generate SRT filename
                     srt_base_filename = f"{video_basename}.{lang}.srt"
