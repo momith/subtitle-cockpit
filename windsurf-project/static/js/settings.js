@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const rootDirInput = document.getElementById('rootDirInput');
   const translationTargetLanguageInput = document.getElementById('translationTargetLanguageInput');
   const waitMsInput = document.getElementById('waitMsInput');
+  const maxCharsPerRequestInput = document.getElementById('maxCharsPerRequestInput');
   const retryDaysInput = document.getElementById('retryDaysInput');
   const autoChangeKeyOnError = document.getElementById('autoChangeKeyOnError');
   const vpnConfigDirInput = document.getElementById('vpnConfigDirInput');
@@ -41,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Cache edited keys per provider locally to preserve when switching providers
   let editedKeys = { DeepL: [], Azure: [], Gemini: [] }; // array of {value, active, last_usage, last_error, last_error_at, vpn_config}
   let editedWaitMs = {}; // provider -> ms
+  let editedMaxCharsPerRequest = {}; // provider -> chars
   let editedRetryDays = { DeepL: 0, Azure: 0, Gemini: 0 };
   let editedAutoChangeOnError = { DeepL: false, Azure: false, Gemini: false };
 
@@ -62,6 +64,7 @@ document.addEventListener('DOMContentLoaded', () => {
       Gemini: Array.isArray(savedKeys.Gemini) ? savedKeys.Gemini.map(copyKeyObj) : []
     };
     editedWaitMs = Object.assign({}, currentSettings.wait_ms || {});
+    editedMaxCharsPerRequest = Object.assign({}, currentSettings.max_chars_per_request || {});
     editedRetryDays = Object.assign({ DeepL: 0, Azure: 0, Gemini: 0 }, currentSettings.retry_after_days || {});
     editedAutoChangeOnError = Object.assign({ DeepL: false, Azure: false, Gemini: false }, currentSettings.auto_change_key_on_error || {});
     renderProviders();
@@ -112,6 +115,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // set wait ms for current provider
     const curProv = (currentSettings && currentSettings.provider) || (allowedProviders[0] || '');
     waitMsInput.value = Number((currentSettings.wait_ms && currentSettings.wait_ms[curProv]) || 0);
+    if (maxCharsPerRequestInput) {
+      maxCharsPerRequestInput.value = Number((currentSettings.max_chars_per_request && currentSettings.max_chars_per_request[curProv]) || 0);
+    }
     renderGlobals();
     await loadVpnConfigs();
     renderKeysSection();
@@ -357,6 +363,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const next = providerSelect.value;
     // update wait ms input for selected provider
     waitMsInput.value = Number((currentSettings.wait_ms && currentSettings.wait_ms[next]) || editedWaitMs[next] || 0);
+    if (maxCharsPerRequestInput) {
+      maxCharsPerRequestInput.value = Number((currentSettings.max_chars_per_request && currentSettings.max_chars_per_request[next]) || editedMaxCharsPerRequest[next] || 0);
+    }
     if (providerSupportsKeys(next)) {
       const saved = currentSettings?.provider_keys?.[next];
       editedKeys[next] = Array.isArray(saved) ? saved.map(copyKeyObj) : [];
@@ -377,6 +386,9 @@ document.addEventListener('DOMContentLoaded', () => {
     persistCurrentProviderKeys();
     // Persist wait_ms for current selected provider only
     editedWaitMs[providerSelect.value] = Number(waitMsInput.value || 0);
+    if (maxCharsPerRequestInput) {
+      editedMaxCharsPerRequest[providerSelect.value] = Number(maxCharsPerRequestInput.value || 0);
+    }
     // Persist provider-specific advanced options
     const p = providerSelect.value;
     if (providerSupportsKeys(p)) {
@@ -425,6 +437,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       },
       wait_ms: editedWaitMs,
+      max_chars_per_request: editedMaxCharsPerRequest,
       retry_after_days: editedRetryDays,
       auto_change_key_on_error: editedAutoChangeOnError,
       provider_keys: {
@@ -449,11 +462,15 @@ document.addEventListener('DOMContentLoaded', () => {
           Gemini: Array.isArray(currentSettings?.provider_keys?.Gemini) ? currentSettings.provider_keys.Gemini.map(copyKeyObj) : []
         };
         editedWaitMs = Object.assign({}, currentSettings.wait_ms || {});
+        editedMaxCharsPerRequest = Object.assign({}, currentSettings.max_chars_per_request || {});
         editedRetryDays = Object.assign({ DeepL: 0, Azure: 0, Gemini: 0 }, currentSettings.retry_after_days || {});
         editedAutoChangeOnError = Object.assign({ DeepL: false, Azure: false, Gemini: false }, currentSettings.auto_change_key_on_error || {});
         autoSwitchOnError.checked = !!currentSettings.auto_switch_on_error;
         // refresh wait ms input for currently selected provider
         waitMsInput.value = Number((currentSettings.wait_ms && currentSettings.wait_ms[providerSelect.value]) || 0);
+        if (maxCharsPerRequestInput) {
+          maxCharsPerRequestInput.value = Number((currentSettings.max_chars_per_request && currentSettings.max_chars_per_request[providerSelect.value]) || 0);
+        }
         vpnConfigDirInput.value = currentSettings.mullvad_vpn_config_dir || '';
         if (ocrSourceLanguageInput) {
           ocrSourceLanguageInput.value = currentSettings.ocr_source_language || 'eng';

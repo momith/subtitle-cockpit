@@ -175,6 +175,7 @@ def _default_settings():
         'azure_endpoint': 'https://api.cognitive.microsofttranslator.com',
         'azure_region': 'eastus',
         'wait_ms': {p: 0 for p in ALLOWED_PROVIDERS},
+        'max_chars_per_request': {p: 0 for p in ALLOWED_PROVIDERS},
         'retry_after_days': {'DeepL': 0, 'Azure': 0, 'Gemini': 0},
         'auto_change_key_on_error': {'DeepL': False, 'Azure': False, 'Gemini': False},
         'provider_keys': {
@@ -287,6 +288,14 @@ def read_settings():
                         wait_ms[p] = int(data['wait_ms'].get(p, 0))
                     except Exception:
                         wait_ms[p] = 0
+            # max_chars_per_request
+            max_chars_per_request = base.get('max_chars_per_request', {p: 0 for p in ALLOWED_PROVIDERS})
+            if isinstance(data.get('max_chars_per_request'), dict):
+                for p in ALLOWED_PROVIDERS:
+                    try:
+                        max_chars_per_request[p] = int(data['max_chars_per_request'].get(p, 0))
+                    except Exception:
+                        max_chars_per_request[p] = 0
             # retry_after_days
             retry_after_days = base['retry_after_days']
             if isinstance(data.get('retry_after_days'), dict):
@@ -327,6 +336,7 @@ def read_settings():
                 'azure_endpoint': azure_endpoint,
                 'azure_region': azure_region,
                 'wait_ms': wait_ms,
+                'max_chars_per_request': max_chars_per_request,
                 'retry_after_days': retry_after_days,
                 'auto_change_key_on_error': auto_change_key_on_error,
                 'provider_keys': {
@@ -379,6 +389,22 @@ def api_settings():
                     wait_ms[p] = int(wait_ms_payload[p])
             except Exception:
                 pass
+
+    max_chars_payload = payload.get('max_chars_per_request', {})
+    max_chars_per_request = existing.get('max_chars_per_request', {p: 0 for p in ALLOWED_PROVIDERS})
+    if isinstance(max_chars_payload, dict):
+        for p in ALLOWED_PROVIDERS:
+            try:
+                if p in max_chars_payload:
+                    max_chars_per_request[p] = int(max_chars_payload[p])
+            except Exception:
+                pass
+    for p in ALLOWED_PROVIDERS:
+        try:
+            if int(max_chars_per_request.get(p, 0)) < 0:
+                max_chars_per_request[p] = 0
+        except Exception:
+            max_chars_per_request[p] = 0
     retry_payload = payload.get('retry_after_days', {})
     retry_after_days = existing.get('retry_after_days', {'DeepL': 0, 'Azure': 0, 'Gemini': 0})
     if isinstance(retry_payload, dict):
@@ -474,6 +500,7 @@ def api_settings():
         'azure_endpoint': azure_endpoint,
         'azure_region': azure_region,
         'wait_ms': wait_ms,
+        'max_chars_per_request': max_chars_per_request,
         'retry_after_days': retry_after_days,
         'auto_change_key_on_error': auto_change_key_on_error,
         'provider_keys': keys_data

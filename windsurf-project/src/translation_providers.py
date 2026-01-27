@@ -15,6 +15,45 @@ from azure.ai.translation.text import TextTranslationClient
 from azure.core.credentials import AzureKeyCredential
 
 
+def _split_batches(texts: List[str], max_items: int = 50, max_chars: int = 0) -> List[List[str]]:
+    max_items = max(1, int(max_items) if max_items is not None else 50)
+    try:
+        max_chars = int(max_chars or 0)
+    except Exception:
+        max_chars = 0
+    if max_chars < 0:
+        max_chars = 0
+
+    batches: List[List[str]] = []
+    current: List[str] = []
+    current_chars = 0
+
+    for t in texts:
+        s = t if isinstance(t, str) else str(t)
+        s_len = len(s)
+
+        would_exceed_items = len(current) >= max_items
+        would_exceed_chars = max_chars > 0 and current and (current_chars + s_len) > max_chars
+
+        if would_exceed_items or would_exceed_chars:
+            batches.append(current)
+            current = []
+            current_chars = 0
+
+        if max_chars > 0 and not current and s_len > max_chars:
+            # Single oversized item: send it alone.
+            batches.append([s])
+            continue
+
+        current.append(s)
+        current_chars += s_len
+
+    if current:
+        batches.append(current)
+
+    return batches
+
+
 def start_vpn(vpn_config_path: str) -> bool:
     """
     Start Mullvad VPN using WireGuard.
@@ -91,6 +130,7 @@ def translate_texts_deepl(
     endpoint: str = "https://api-free.deepl.com/v2/translate",
     context: str = "These are subtitles from a video file.",
     batch_size: int = 50,
+    max_chars_per_request: int = 0,
     delay: float = 0.0,
     max_retries: int = 5,
 ) -> List[str]:
@@ -114,43 +154,25 @@ def translate_texts_deepl(
         "Content-Type": "application/json",
     }
 
-    def _post_with_retries(payload_obj: dict) -> dict:
-        last_exc: Optional[Exception] = None
-        for attempt in range(max_retries + 1):
-            try:
-                resp = requests.post(
-                    url,
-                    headers=headers,
-                    data=json.dumps(payload_obj, ensure_ascii=False),
-                    timeout=(10, 120),
-                )
-
-                if resp.status_code in (429, 500, 502, 503, 504):
-                    wait_s = min(60.0, max(1.0, (delay if delay and delay > 0 else 1.0)) * (2 ** attempt))
-                    body_preview = (resp.text or "").strip().replace("\n", " ")[:500]
-                    logging.warning(
-                        f"DeepL API returned HTTP {resp.status_code}. "
-                        f"Waiting {wait_s}s before retry {attempt + 1}/{max_retries}. Response: {body_preview}"
-                    )
-                    time.sleep(wait_s)
-                    continue
-
-                resp.raise_for_status()
-                return resp.json()
-
-            except Exception as e:
-                last_exc = e
-                wait_s = min(30.0, max(1.0, (delay if delay and delay > 0 else 1.0)) * (2 ** attempt))
-                logging.warning(
-                    f"DeepL request error: {e}. Waiting {wait_s}s before retry {attempt + 1}/{max_retries}."
-                )
-                time.sleep(wait_s)
-
-        raise RuntimeError(f"DeepL request failed after {max_retries} retries") from last_exc
+    def _post(payload_obj: dict) -> dict:
+        resp = requests.post(
+            url,
+            headers=headers,
+            data=json.dumps(payload_obj, ensure_ascii=False),
+            timeout=(10, 120),
+        )
+        if not resp.ok:
+            body_preview = (resp.text or "").strip().replace("\n", " ")[:500]
+            raise RuntimeError(f"DeepL API returned HTTP {resp.status_code}. Response: {body_preview}")
+        try:
+            return resp.json()
+        except Exception as e:
+            body_preview = (resp.text or "").strip().replace("\n", " ")[:500]
+            raise RuntimeError(f"DeepL returned non-JSON response: {e}. Response: {body_preview}") from e
 
     translations: list[str] = []
-    for i in range(0, len(cleaned), max(1, int(batch_size))):
-        batch = cleaned[i:i + batch_size]
+    batches = _split_batches(cleaned, max_items=batch_size, max_chars=max_chars_per_request)
+    for bi, batch in enumerate(batches):
         payload_obj = {
             "text": batch,
             "target_lang": target_lang.upper(),
@@ -160,14 +182,14 @@ def translate_texts_deepl(
             "preserve_formatting": False,
         }
 
-        data = _post_with_retries(payload_obj)
+        data = _post(payload_obj)
         items = data.get("translations")
         if not isinstance(items, list) or len(items) != len(batch):
             raise ValueError(f"DeepL returned unexpected response shape: {data}")
 
         translations.extend([str(x.get("text", "")) for x in items])
 
-        if i + batch_size < len(cleaned) and delay and delay > 0:
+        if bi + 1 < len(batches) and delay and delay > 0:
             time.sleep(delay)
 
     return translations
@@ -180,6 +202,7 @@ def translate_texts_azure(
     endpoint: str = "https://api.cognitive.microsofttranslator.com",
     region: str = "germanywestcentral",
     batch_size: int = 50,
+    max_chars_per_request: int = 0,
     delay: float = 1.0
 ) -> List[str]:
     """
@@ -208,36 +231,18 @@ def translate_texts_azure(
     all_translations = []
     
     # Process in batches
-    for i in range(0, len(cleaned), batch_size):
-        batch = cleaned[i:i + batch_size]
+    batches = _split_batches(cleaned, max_items=batch_size, max_chars=max_chars_per_request)
+    for bi, batch in enumerate(batches):
         request_body = [{"text": t} for t in batch]
         
-        success = False
-        retry_count = 0
-        max_retries = 3
-        
-        while not success and retry_count < max_retries:
-            try:
-                response = client.translate(
-                    body=request_body,
-                    to_language=[target_lang.lower()]
-                )
-                all_translations.extend([item.translations[0].text for item in response])
-                success = True
-            except Exception as e:
-                if "(429" in str(e):
-                    # Rate limit hit
-                    logging.warning(f"Rate limit hit. Waiting 9 seconds... (retry {retry_count + 1}/{max_retries})")
-                    time.sleep(9)
-                    retry_count += 1
-                else:
-                    raise
-        
-        if not success:
-            raise RuntimeError(f"Failed to translate batch after {max_retries} retries")
+        response = client.translate(
+            body=request_body,
+            to_language=[target_lang.lower()]
+        )
+        all_translations.extend([item.translations[0].text for item in response])
         
         # Sleep between batches (except after the last batch)
-        if i + batch_size < len(cleaned) and delay and delay > 0:
+        if bi + 1 < len(batches) and delay and delay > 0:
             time.sleep(delay)
     
     return all_translations
@@ -249,6 +254,7 @@ def translate_texts_gemini(
     api_key: str,
     model_name: str = "gemini-2.0-flash",
     batch_size: int = 50,
+    max_chars_per_request: int = 0,
     delay: float = 1.0,
     max_retries: int = 6
 ) -> List[str]:
@@ -358,41 +364,25 @@ def translate_texts_gemini(
     client = genai.Client(api_key=api_key)
 
     def _call_with_retries(contents: str) -> str:
-        last_exc: Optional[Exception] = None
-        for attempt in range(max_retries + 1):
-            try:
-                resp = client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_text,
-                        temperature=0,
-                        response_mime_type="application/json",
-                        response_json_schema=response_schema,
-                    ),
-                )
-                return resp.text or ""
-            except Exception as e:
-                last_exc = e
-                msg = str(e)
-                lower = msg.lower()
-                if "limit: 0" in lower or "billing" in lower or "check your plan" in lower:
-                    raise RuntimeError(
-                        "Gemini API quota is not available for this key/project. "
-                        "Enable billing / request quota in Google AI Studio for the Gemini API, "
-                        "or use a different key/project/model."
-                    ) from e
-                base = delay if delay and delay > 0 else 1.0
-                wait_s = min(60.0, base * (2 ** attempt))
-                logging.warning(
-                    f"Gemini request error: {e}. Waiting {wait_s}s before retry {attempt + 1}/{max_retries}."
-                )
-                time.sleep(wait_s)
-        raise RuntimeError(f"Gemini request failed after {max_retries} retries") from last_exc
+        resp = client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_text,
+                temperature=0,
+                response_mime_type="application/json",
+                response_json_schema=response_schema,
+            ),
+        )
+        return resp.text or ""
 
     results: list[str] = []
-    for i in range(0, len(cleaned), max(1, int(batch_size))):
-        batch = cleaned[i:i + batch_size]
+    # If a max char budget is configured, batching should primarily follow it.
+    # We intentionally do not also hard-cap by the default batch_size (50), otherwise
+    # small total-char files would still be split into many requests.
+    split_max_items = len(cleaned) if (max_chars_per_request and max_chars_per_request > 0) else batch_size
+    batches = _split_batches(cleaned, max_items=split_max_items, max_chars=max_chars_per_request)
+    for bi, batch in enumerate(batches):
         user_json = json.dumps(
             [{"index": str(j), "content": t} for j, t in enumerate(batch)],
             ensure_ascii=False,
@@ -409,7 +399,7 @@ def translate_texts_gemini(
         translated_texts = _normalize_translated_payload(payload, expected_len=len(batch))
         results.extend(translated_texts)
 
-        if i + batch_size < len(cleaned) and delay and delay > 0:
+        if bi + 1 < len(batches) and delay and delay > 0:
             time.sleep(delay)
 
     return results
@@ -422,6 +412,7 @@ def translate_srt_file(
     provider: str,
     api_key: str,
     wait_ms: int = 1000,
+    max_chars_per_request: int = 0,
     deepl_endpoint: str = "https://api-free.deepl.com/v2/translate",
     azure_endpoint: str = "https://api.cognitive.microsofttranslator.com",
     azure_region: str = "germanywestcentral",
@@ -494,6 +485,7 @@ def translate_srt_file(
                     api_key,
                     endpoint=deepl_endpoint,
                     delay=delay_seconds,
+                    max_chars_per_request=max_chars_per_request,
                 )
             elif provider.lower() == "azure":
                 translations = translate_texts_azure(
@@ -502,7 +494,8 @@ def translate_srt_file(
                     api_key,
                     endpoint=azure_endpoint,
                     region=azure_region,
-                    delay=delay_seconds
+                    delay=delay_seconds,
+                    max_chars_per_request=max_chars_per_request,
                 )
             elif provider.lower() == "gemini":
                 translations = translate_texts_gemini(
@@ -510,7 +503,8 @@ def translate_srt_file(
                     target_lang,
                     api_key,
                     model_name=gemini_model,
-                    delay=delay_seconds
+                    delay=delay_seconds,
+                    max_chars_per_request=max_chars_per_request,
                 )
             else:
                 logging.error(f"Unsupported provider: {provider}")

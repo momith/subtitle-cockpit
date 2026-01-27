@@ -773,6 +773,7 @@ class JobQueue:
                     vpn_config_path = None
         
         wait_ms = settings.get('wait_ms', {}).get(provider, 1000)
+        max_chars_per_request = settings.get('max_chars_per_request', {}).get(provider, 0)
         
         # Build paths
         abs_path = os.path.join(base_dir, file_path)
@@ -806,6 +807,7 @@ class JobQueue:
                 provider=provider,
                 api_key=api_key,
                 wait_ms=wait_ms,
+                max_chars_per_request=max_chars_per_request,
                 deepl_endpoint=deepl_endpoint,
                 azure_endpoint=azure_endpoint,
                 azure_region=azure_region,
