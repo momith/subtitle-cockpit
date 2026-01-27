@@ -287,13 +287,11 @@ def translate_texts_gemini(
         if not isinstance(payload, list):
             raise ValueError("Gemini returned non-list JSON")
 
-        if len(payload) != expected_len:
-            raise ValueError(f"Gemini returned {len(payload)} items instead of {expected_len}")
-
-        idx_to_text: dict[int, str] = {}
+        idx_to_texts: dict[int, list[str]] = {}
         for pos, item in enumerate(payload):
             if isinstance(item, str):
-                idx_to_text[pos] = item
+                idx = pos
+                idx_to_texts.setdefault(idx, []).append(item)
                 continue
 
             if not isinstance(item, dict):
@@ -317,22 +315,20 @@ def translate_texts_gemini(
             if content is None:
                 raise ValueError("Gemini returned invalid item structure")
 
-            idx_to_text[idx] = str(content)
+            idx_to_texts.setdefault(idx, []).append(str(content))
 
-        if set(idx_to_text.keys()) != set(range(expected_len)):
-            ordered: list[str] = []
-            for item in payload:
-                if isinstance(item, str):
-                    ordered.append(item)
-                elif isinstance(item, dict):
-                    ordered.append(str(item.get("content") or item.get("text") or item.get("translation") or ""))
-                else:
-                    ordered.append("")
-            if len(ordered) != expected_len:
+        ordered: list[str] = []
+        for i in range(expected_len):
+            parts = idx_to_texts.get(i)
+            if not parts:
                 raise ValueError("Gemini returned unexpected indices")
-            return ordered
+            merged = "\n".join([p for p in parts if p is not None])
+            ordered.append(merged)
 
-        return [idx_to_text[i] for i in range(expected_len)]
+        if len(ordered) != expected_len:
+            raise ValueError("Gemini returned unexpected indices")
+
+        return ordered
 
     system_text = (
         f"You are an assistant that translates subtitles to {target_lang}.\n"
@@ -341,7 +337,8 @@ def translate_texts_gemini(
         "The 'content' key is the dialog to be translated.\n"
         "The indices must remain the same in the response as in the request.\n"
         "Dialogs must be translated as they are without any changes.\n"
-        "If a line has a comma or multiple sentences, try to keep one line to about 40-50 characters.\n"
+        "Do NOT create, remove, split, or merge items. Exactly one output item per input item.\n"
+        "If you need line breaks, use the literal newline escape \\n inside the content string; do not create additional JSON items.\n"
         "Return ONLY valid JSON, with the exact same number of items as the request. No markdown, no explanations."
     )
 
