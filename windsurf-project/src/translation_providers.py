@@ -283,6 +283,50 @@ def translate_texts_gemini(
             return s2[start:end + 1].strip()
         return s2
 
+    def _escape_control_chars_in_json_strings(s: str) -> str:
+        # Gemini sometimes returns invalid JSON by placing literal newlines/control chars
+        # inside quoted strings. JSON requires these be escaped.
+        out: list[str] = []
+        in_string = False
+        escaped = False
+        for ch in s:
+            if in_string:
+                if escaped:
+                    out.append(ch)
+                    escaped = False
+                    continue
+                if ch == '\\':
+                    out.append(ch)
+                    escaped = True
+                    continue
+                if ch == '"':
+                    out.append(ch)
+                    in_string = False
+                    continue
+                if ch == '\n':
+                    out.append('\\n')
+                    continue
+                if ch == '\r':
+                    out.append('\\r')
+                    continue
+                if ch == '\t':
+                    out.append('\\t')
+                    continue
+                o = ord(ch)
+                if o < 0x20:
+                    out.append(f"\\u{o:04x}")
+                    continue
+                out.append(ch)
+                continue
+
+            # not in string
+            out.append(ch)
+            if ch == '"':
+                in_string = True
+                escaped = False
+
+        return ''.join(out)
+
     def _normalize_translated_payload(payload, expected_len: int) -> list[str]:
         if isinstance(payload, dict):
             for k in ("translations", "items", "data", "result", "output"):
@@ -345,6 +389,7 @@ def translate_texts_gemini(
         "Dialogs must be translated as they are without any changes.\n"
         "Do NOT create, remove, split, or merge items. Exactly one output item per input item.\n"
         "If you need line breaks, use the literal newline escape \\n inside the content string; do not create additional JSON items.\n"
+        "Never output literal newlines inside JSON strings. All line breaks must be escaped as \\n.\n"
         "Return ONLY valid JSON, with the exact same number of items as the request. No markdown, no explanations."
     )
 
@@ -393,8 +438,12 @@ def translate_texts_gemini(
         try:
             payload = json.loads(json_text)
         except Exception as e:
-            preview = (text or "").strip().replace("\n", " ")[:500]
-            raise ValueError(f"Gemini returned non-JSON output: {e}. Output preview: {preview}")
+            try:
+                fixed = _escape_control_chars_in_json_strings(json_text)
+                payload = json.loads(fixed)
+            except Exception:
+                preview = (text or "").strip().replace("\n", " ")[:500]
+                raise ValueError(f"Gemini returned non-JSON output: {e}. Output preview: {preview}")
 
         translated_texts = _normalize_translated_payload(payload, expected_len=len(batch))
         results.extend(translated_texts)
