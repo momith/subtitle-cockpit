@@ -722,10 +722,71 @@ def upload_file():
         # Check if file already exists
         if os.path.exists(target_path):
             return jsonify({'error': f'File "{filename}" already exists in this directory'}), 409
-        
-        # Save file
-        file.save(target_path)
-        logging.info(f'File uploaded successfully: {target_path}')
+
+        tmp_target_path = target_path + '.uploading'
+        if os.path.exists(tmp_target_path):
+            return jsonify({'error': f'Upload already in progress for "{filename}"'}), 409
+
+        # Save file (streamed) with progress logging
+        start_time = time.time()
+        last_log_time = start_time
+        bytes_written = 0
+        chunk_size = 8 * 1024 * 1024  # 8 MiB
+
+        total_size = None
+        try:
+            total_size = int(getattr(file, 'content_length', None) or 0) or None
+        except Exception:
+            total_size = None
+
+        if not total_size:
+            try:
+                total_size = int(getattr(request, 'content_length', None) or 0) or None
+            except Exception:
+                total_size = None
+
+        logging.info(
+            f'Upload started: filename={filename}, target_path={target_path}, total_size={total_size}, from={request.remote_addr}'
+        )
+
+        try:
+            with open(tmp_target_path, 'wb') as out:
+                while True:
+                    chunk = file.stream.read(chunk_size)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    bytes_written += len(chunk)
+
+                    now = time.time()
+                    if now - last_log_time >= 2:
+                        elapsed = max(now - start_time, 0.001)
+                        speed_mbps = (bytes_written / elapsed) / (1024 * 1024)
+                        if total_size:
+                            pct = (bytes_written / total_size) * 100
+                            logging.info(
+                                f'Upload progress: filename={filename}, bytes={bytes_written}/{total_size} ({pct:.1f}%), speed={speed_mbps:.1f} MiB/s'
+                            )
+                        else:
+                            logging.info(
+                                f'Upload progress: filename={filename}, bytes={bytes_written}, speed={speed_mbps:.1f} MiB/s'
+                            )
+                        last_log_time = now
+
+            os.replace(tmp_target_path, target_path)
+            elapsed = max(time.time() - start_time, 0.001)
+            speed_mbps = (bytes_written / elapsed) / (1024 * 1024)
+            logging.info(
+                f'Upload finished: filename={filename}, target_path={target_path}, bytes={bytes_written}, seconds={elapsed:.2f}, speed={speed_mbps:.1f} MiB/s'
+            )
+
+        except Exception:
+            try:
+                if os.path.exists(tmp_target_path):
+                    os.remove(tmp_target_path)
+            except Exception:
+                pass
+            raise
         
         # Return relative path for frontend
         rel_path = os.path.relpath(target_path, base_dir).replace('\\', '/')
@@ -739,6 +800,113 @@ def upload_file():
         
     except Exception as e:
         logging.exception(f'Error uploading file: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/upload_raw', methods=['POST'])
+def upload_file_raw():
+    """Upload a file via raw request body (streams directly, supports progress logging)"""
+    try:
+        # Get target directory from query param
+        target_dir = (request.args.get('path', '') or '').strip()
+        requested_filename = (request.args.get('filename', '') or '').strip()
+
+        settings = read_settings()
+        base_dir = settings.get('root_dir') or app.config.get('BASE_DIR')
+        if not base_dir:
+            return jsonify({'error': 'Base directory not configured'}), 400
+
+        # Normalize and ensure path stays within base_dir
+        full_target_dir = os.path.normpath(os.path.join(base_dir, target_dir))
+        if not full_target_dir.startswith(os.path.normpath(base_dir)):
+            return jsonify({'error': 'Path outside base directory'}), 403
+
+        if not os.path.exists(full_target_dir):
+            return jsonify({'error': 'Target directory does not exist'}), 404
+
+        if not os.path.isdir(full_target_dir):
+            return jsonify({'error': 'Target path is not a directory'}), 400
+
+        from werkzeug.utils import secure_filename
+        filename = secure_filename(requested_filename)
+        if not filename:
+            return jsonify({'error': 'Invalid filename'}), 400
+
+        target_path = os.path.join(full_target_dir, filename)
+
+        # Check if file already exists
+        if os.path.exists(target_path):
+            return jsonify({'error': f'File "{filename}" already exists in this directory'}), 409
+
+        tmp_target_path = target_path + '.uploading'
+        if os.path.exists(tmp_target_path):
+            return jsonify({'error': f'Upload already in progress for "{filename}"'}), 409
+
+        # Stream request body to disk with progress logging
+        start_time = time.time()
+        last_log_time = start_time
+        bytes_written = 0
+        chunk_size = 8 * 1024 * 1024  # 8 MiB
+
+        total_size = None
+        try:
+            total_size = int(getattr(request, 'content_length', None) or 0) or None
+        except Exception:
+            total_size = None
+
+        logging.info(
+            f'Upload(raw) started: filename={filename}, target_path={target_path}, total_size={total_size}, from={request.remote_addr}'
+        )
+
+        try:
+            with open(tmp_target_path, 'wb') as out:
+                while True:
+                    chunk = request.stream.read(chunk_size)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    bytes_written += len(chunk)
+
+                    now = time.time()
+                    if now - last_log_time >= 2:
+                        elapsed = max(now - start_time, 0.001)
+                        speed_mibs = (bytes_written / elapsed) / (1024 * 1024)
+                        if total_size:
+                            pct = (bytes_written / total_size) * 100
+                            logging.info(
+                                f'Upload(raw) progress: filename={filename}, bytes={bytes_written}/{total_size} ({pct:.1f}%), speed={speed_mibs:.1f} MiB/s'
+                            )
+                        else:
+                            logging.info(
+                                f'Upload(raw) progress: filename={filename}, bytes={bytes_written}, speed={speed_mibs:.1f} MiB/s'
+                            )
+                        last_log_time = now
+
+            os.replace(tmp_target_path, target_path)
+            elapsed = max(time.time() - start_time, 0.001)
+            speed_mibs = (bytes_written / elapsed) / (1024 * 1024)
+            logging.info(
+                f'Upload(raw) finished: filename={filename}, target_path={target_path}, bytes={bytes_written}, seconds={elapsed:.2f}, speed={speed_mibs:.1f} MiB/s'
+            )
+
+        except Exception:
+            try:
+                if os.path.exists(tmp_target_path):
+                    os.remove(tmp_target_path)
+            except Exception:
+                pass
+            raise
+
+        rel_path = os.path.relpath(target_path, base_dir).replace('\\', '/')
+        return jsonify({
+            'ok': True,
+            'message': f'File "{filename}" uploaded successfully',
+            'path': rel_path,
+            'filename': filename
+        })
+
+    except Exception as e:
+        logging.exception(f'Error uploading file (raw): {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/delete', methods=['POST'])

@@ -8,6 +8,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const downloadBtn = document.getElementById('downloadBtn');
     const uploadBtn = document.getElementById('uploadBtn');
     const uploadFileInput = document.getElementById('uploadFileInput');
+    const uploadProgress = document.getElementById('uploadProgress');
+    const uploadProgressLabel = document.getElementById('uploadProgressLabel');
+    const uploadProgressBar = document.getElementById('uploadProgressBar');
+    const uploadProgressText = document.getElementById('uploadProgressText');
     const extractBtn = document.getElementById('extractBtn');
     const translateBtn = document.getElementById('translateBtn');
     const supToSrtBtn = document.getElementById('supToSrtBtn');
@@ -76,6 +80,57 @@ document.addEventListener('DOMContentLoaded', function() {
         setTimeout(() => {
             toast.remove();
         }, 300);
+    }
+
+    function setUploadProgressVisible(visible) {
+        if (!uploadProgress) return;
+        uploadProgress.style.display = visible ? '' : 'none';
+    }
+
+    function updateUploadProgress(label, percent) {
+        if (!uploadProgress) return;
+        if (uploadProgressLabel) uploadProgressLabel.textContent = label || '';
+        const pct = Math.max(0, Math.min(100, Math.round(percent || 0)));
+        if (uploadProgressBar) uploadProgressBar.style.width = `${pct}%`;
+        if (uploadProgressText) uploadProgressText.textContent = `${pct}%`;
+    }
+
+    function uploadFileWithProgress(file, targetPath, onProgress) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            const url = `/api/upload_raw?path=${encodeURIComponent(targetPath || '')}&filename=${encodeURIComponent(file.name)}`;
+            xhr.open('POST', url, true);
+
+            xhr.upload.onprogress = (evt) => {
+                if (!evt || !evt.lengthComputable) {
+                    onProgress && onProgress(null);
+                    return;
+                }
+                const percent = (evt.loaded / evt.total) * 100;
+                onProgress && onProgress(percent);
+            };
+
+            xhr.onload = () => {
+                let data = null;
+                try {
+                    data = JSON.parse(xhr.responseText || '{}');
+                } catch (e) {
+                    data = { error: 'Invalid JSON response from server' };
+                }
+
+                resolve({
+                    ok: xhr.status >= 200 && xhr.status < 300,
+                    status: xhr.status,
+                    data
+                });
+            };
+
+            xhr.onerror = () => reject(new Error('Network error during upload'));
+            xhr.onabort = () => reject(new Error('Upload aborted'));
+
+            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+            xhr.send(file);
+        });
     }
 
     const videoExts = new Set(['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpeg', '.mpg']);
@@ -801,6 +856,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 const errors = [];
                 
                 showToast(`Uploading ${totalFiles} file(s)...Do not leave this page!`, 'info', 6000);
+
+                setUploadProgressVisible(true);
                 
                 // Upload files sequentially
                 for (let i = 0; i < files.length; i++) {
@@ -808,19 +865,23 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     try {
                         uploadBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Uploading ${i + 1}/${totalFiles}...`;
-                        
-                        const formData = new FormData();
-                        formData.append('file', file);
-                        formData.append('path', currentPath);
-                        
-                        const response = await fetch('/api/upload', {
-                            method: 'POST',
-                            body: formData
+
+                        updateUploadProgress(`Uploading ${file.name} (${i + 1}/${totalFiles})`, 0);
+
+                        const result = await uploadFileWithProgress(file, currentPath, (pct) => {
+                            if (pct === null) {
+                                updateUploadProgress(`Uploading ${file.name} (${i + 1}/${totalFiles})`, 0);
+                                return;
+                            }
+                            updateUploadProgress(`Uploading ${file.name} (${i + 1}/${totalFiles})`, pct);
                         });
-                        
-                        const data = await response.json();
-                        
-                        if (!response.ok || data.error) {
+
+                        const data = result.data;
+                        const ok = result.ok;
+
+                        updateUploadProgress(`Uploading ${file.name} (${i + 1}/${totalFiles})`, 100);
+
+                        if (!ok || data.error) {
                             failCount++;
                             errors.push(`${file.name}: ${data.error || 'Unknown error'}`);
                         } else {
@@ -855,6 +916,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 console.error('Upload error:', e);
                 showToast(`Upload failed: ${e.message}`, 'error', 5000);
             } finally {
+                setUploadProgressVisible(false);
+                updateUploadProgress('', 0);
                 uploadInProgress = false;
                 uploadBtn.disabled = false;
                 uploadBtn.innerHTML = '<i class="fas fa-upload"></i> Upload Files';

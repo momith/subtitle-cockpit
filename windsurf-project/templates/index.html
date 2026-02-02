@@ -57,6 +57,14 @@
             </button>
             <input type="file" id="uploadFileInput" multiple style="display: none;" />
         </div>
+
+        <div id="uploadProgress" class="upload-progress-container" style="display: none;">
+            <div id="uploadProgressLabel" class="upload-progress-label"></div>
+            <div class="upload-progress-bar-outer">
+                <div id="uploadProgressBar" class="upload-progress-bar-inner"></div>
+            </div>
+            <div id="uploadProgressText" class="upload-progress-text">0%</div>
+        </div>
         <div class="toolbar" style="margin-top:6px;">
             <button id="extractBtn" class="btn" disabled>
                 <i class="fas fa-file-export"></i> Extract embedded subtitles

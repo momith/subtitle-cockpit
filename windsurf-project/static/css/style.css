@@ -118,6 +118,50 @@ h1 {
     margin-bottom: 20px;
 }
 
+ .upload-progress-container {
+     margin-top: 10px;
+     background-color: var(--card-bg);
+     border: 1px solid var(--border-color);
+     border-radius: 8px;
+     padding: 10px 12px;
+     display: flex;
+     align-items: center;
+     gap: 12px;
+ }
+ 
+ .upload-progress-label {
+     font-size: 13px;
+     color: var(--text-light);
+     min-width: 220px;
+     max-width: 320px;
+     overflow: hidden;
+     text-overflow: ellipsis;
+     white-space: nowrap;
+ }
+ 
+ .upload-progress-bar-outer {
+     flex: 1;
+     height: 10px;
+     background: #e1e4e8;
+     border-radius: 999px;
+     overflow: hidden;
+ }
+ 
+ .upload-progress-bar-inner {
+     height: 100%;
+     width: 0%;
+     background: var(--primary-color);
+     transition: width 0.1s linear;
+ }
+ 
+ .upload-progress-text {
+     font-size: 13px;
+     color: var(--text-light);
+     width: 70px;
+     text-align: right;
+     font-variant-numeric: tabular-nums;
+ }
+
 .btn {
     background-color: var(--primary-color);
     color: white;
