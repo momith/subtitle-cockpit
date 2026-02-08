@@ -1741,6 +1741,82 @@ def rename_file():
         logging.exception(f'Rename/move error: {e}')
         return jsonify({'error': f'Failed to rename/move: {str(e)}'}), 500
 
+
+@app.route('/api/bulk_rename', methods=['POST'])
+def bulk_rename_files():
+    data = request.get_json(silent=True) or {}
+    paths = data.get('paths', [])
+    find = str(data.get('find', '') or '')
+    replace = str(data.get('replace', '') or '')
+
+    if not isinstance(paths, list) or len(paths) == 0:
+        return jsonify({'error': 'No files provided'}), 400
+
+    if not find:
+        return jsonify({'error': 'Find cannot be empty'}), 400
+
+    settings = read_settings()
+    base_dir = settings.get('root_dir') or app.config.get('BASE_DIR')
+    if not base_dir:
+        return jsonify({'error': 'Base directory not configured'}), 400
+
+    base_dir_abs = os.path.abspath(os.path.normpath(base_dir))
+    results = []
+
+    for rel in paths:
+        try:
+            if not isinstance(rel, str):
+                results.append({'path': rel, 'status': 'failed', 'error': 'Invalid path'})
+                continue
+
+            safe_rel = rel.lstrip('/').replace('..', '')
+            old_abs = os.path.abspath(os.path.normpath(os.path.join(base_dir_abs, safe_rel)))
+
+            if os.path.commonpath([base_dir_abs, old_abs]) != base_dir_abs:
+                results.append({'path': rel, 'status': 'failed', 'error': 'Path is outside base directory'})
+                continue
+
+            if not os.path.exists(old_abs):
+                results.append({'path': rel, 'status': 'failed', 'error': 'Source does not exist'})
+                continue
+
+            if os.path.isdir(old_abs):
+                results.append({'path': rel, 'status': 'failed', 'error': 'Directories are not supported'})
+                continue
+
+            old_name = os.path.basename(old_abs)
+            new_name = old_name.replace(find, replace)
+
+            if new_name == old_name:
+                results.append({'path': rel, 'status': 'skipped', 'old_name': old_name, 'new_name': new_name})
+                continue
+
+            new_abs = os.path.normpath(os.path.join(os.path.dirname(old_abs), new_name))
+
+            if os.path.exists(new_abs):
+                results.append({'path': rel, 'status': 'failed', 'old_name': old_name, 'new_name': new_name, 'error': 'Target path already exists'})
+                continue
+
+            os.rename(old_abs, new_abs)
+            new_rel = os.path.relpath(new_abs, base_dir_abs).replace('\\', '/')
+            results.append({'path': rel, 'new_path': new_rel, 'status': 'renamed', 'old_name': old_name, 'new_name': new_name})
+        except Exception as e:
+            logging.exception('Bulk rename error for %s: %s', rel, e)
+            results.append({'path': rel, 'status': 'failed', 'error': str(e)})
+
+    renamed = len([r for r in results if r.get('status') == 'renamed'])
+    skipped = len([r for r in results if r.get('status') == 'skipped'])
+    failed = len([r for r in results if r.get('status') == 'failed'])
+
+    return jsonify({
+        'find': find,
+        'replace': replace,
+        'renamed': renamed,
+        'skipped': skipped,
+        'failed': failed,
+        'results': results
+    })
+
 @app.route('/api/extract_subtitles', methods=['POST'])
 def extract_subtitles():
     """Add subtitle extraction jobs to queue"""

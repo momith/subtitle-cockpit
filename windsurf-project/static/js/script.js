@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const selectAll = document.getElementById('selectAll');
     const refreshBtn = document.getElementById('refreshBtn');
     const renameBtn = document.getElementById('renameBtn');
+    const bulkEditBtn = document.getElementById('bulkEditBtn');
     const deleteBtn = document.getElementById('deleteBtn');
     const downloadBtn = document.getElementById('downloadBtn');
     const uploadBtn = document.getElementById('uploadBtn');
@@ -27,6 +28,15 @@ document.addEventListener('DOMContentLoaded', function() {
     const renameConfirmBtn = document.getElementById('renameConfirmBtn');
     const renameCancelBtn = document.getElementById('renameCancelBtn');
     const renameModalClose = document.getElementById('renameModalClose');
+
+    const bulkRenameModal = document.getElementById('bulkRenameModal');
+    const bulkRenameModalClose = document.getElementById('bulkRenameModalClose');
+    const bulkRenameCancelBtn = document.getElementById('bulkRenameCancelBtn');
+    const bulkRenameConfirmBtn = document.getElementById('bulkRenameConfirmBtn');
+    const bulkRenameFind = document.getElementById('bulkRenameFind');
+    const bulkRenameReplace = document.getElementById('bulkRenameReplace');
+    const bulkRenamePreview = document.getElementById('bulkRenamePreview');
+    const bulkRenameError = document.getElementById('bulkRenameError');
 
     const publishModal = document.getElementById('publishModal');
     const publishModalClose = document.getElementById('publishModalClose');
@@ -87,6 +97,56 @@ document.addEventListener('DOMContentLoaded', function() {
         setTimeout(() => {
             removeToast(toast);
         }, duration);
+    }
+
+    function showBulkRenameError(msg) {
+        if (!bulkRenameError) return;
+        if (!msg) {
+            bulkRenameError.style.display = 'none';
+            bulkRenameError.textContent = '';
+            return;
+        }
+        bulkRenameError.textContent = msg;
+        bulkRenameError.style.display = 'block';
+    }
+
+    function computeBulkRenamePreview(find, replace) {
+        const findStr = (find || '');
+        const replaceStr = (replace || '');
+        const selected = Array.from(selectedFiles);
+
+        if (!bulkRenamePreview) return;
+        if (!selected.length) {
+            bulkRenamePreview.innerHTML = '';
+            return;
+        }
+
+        const lines = selected.slice(0, 100).map(p => {
+            const parts = (p || '').split('/');
+            const oldName = parts[parts.length - 1] || '';
+            const newName = findStr ? oldName.split(findStr).join(replaceStr) : oldName;
+            if (!findStr) {
+                return `${oldName}`;
+            }
+            return `${oldName} -> ${newName}`;
+        });
+
+        let extra = '';
+        if (selected.length > 100) {
+            extra = `\n... and ${selected.length - 100} more`;
+        }
+
+        bulkRenamePreview.textContent = lines.join('\n') + extra;
+    }
+
+    function openBulkRenameModal() {
+        if (!bulkRenameModal) return;
+        showBulkRenameError('');
+        if (bulkRenameFind) bulkRenameFind.value = '';
+        if (bulkRenameReplace) bulkRenameReplace.value = '';
+        computeBulkRenamePreview('', '');
+        bulkRenameModal.style.display = 'flex';
+        setTimeout(() => bulkRenameFind && bulkRenameFind.focus(), 0);
     }
     
     function removeToast(toast) {
@@ -443,9 +503,13 @@ document.addEventListener('DOMContentLoaded', function() {
     function updateActionButton() {
         const anySelected = selectedFiles.size > 0;
         const oneSelected = selectedFiles.size === 1;
+        const multiSelected = selectedFiles.size > 1;
         deleteBtn.disabled = !anySelected;
         if (renameBtn) {
             renameBtn.disabled = !oneSelected;
+        }
+        if (bulkEditBtn) {
+            bulkEditBtn.disabled = !multiSelected;
         }
         if (downloadBtn) {
             downloadBtn.disabled = !oneSelected;
@@ -641,7 +705,88 @@ document.addEventListener('DOMContentLoaded', function() {
         if (e.key === 'Escape' && publishModal && publishModal.style.display === 'flex') {
             publishModal.style.display = 'none';
         }
+        if (e.key === 'Escape' && bulkRenameModal && bulkRenameModal.style.display === 'flex') {
+            bulkRenameModal.style.display = 'none';
+        }
     });
+
+    if (bulkEditBtn) {
+        bulkEditBtn.addEventListener('click', () => {
+            if (bulkEditBtn.disabled) return;
+            openBulkRenameModal();
+        });
+    }
+
+    if (bulkRenameModalClose) {
+        bulkRenameModalClose.addEventListener('click', () => {
+            if (bulkRenameModal) bulkRenameModal.style.display = 'none';
+        });
+    }
+
+    if (bulkRenameCancelBtn) {
+        bulkRenameCancelBtn.addEventListener('click', () => {
+            if (bulkRenameModal) bulkRenameModal.style.display = 'none';
+        });
+    }
+
+    function onBulkRenameInputChange() {
+        computeBulkRenamePreview(
+            bulkRenameFind ? bulkRenameFind.value : '',
+            bulkRenameReplace ? bulkRenameReplace.value : ''
+        );
+    }
+
+    if (bulkRenameFind) bulkRenameFind.addEventListener('input', onBulkRenameInputChange);
+    if (bulkRenameReplace) bulkRenameReplace.addEventListener('input', onBulkRenameInputChange);
+
+    if (bulkRenameConfirmBtn) {
+        bulkRenameConfirmBtn.addEventListener('click', async () => {
+            if (!bulkRenameModal) return;
+            const findStr = (bulkRenameFind ? bulkRenameFind.value : '').trim();
+            const replaceStr = (bulkRenameReplace ? bulkRenameReplace.value : '');
+            const selected = Array.from(selectedFiles);
+
+            showBulkRenameError('');
+
+            if (selected.length < 2) {
+                showBulkRenameError('Select at least 2 files.');
+                return;
+            }
+            if (!findStr) {
+                showBulkRenameError('Find cannot be empty.');
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/bulk_rename', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        paths: selected,
+                        find: findStr,
+                        replace: replaceStr
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    showBulkRenameError(data.error || 'Bulk rename failed.');
+                    return;
+                }
+
+                const renamed = data.renamed || 0;
+                const skipped = data.skipped || 0;
+                const failed = data.failed || 0;
+
+                showToast(`Bulk rename: renamed ${renamed}, skipped ${skipped}, failed ${failed}.`, failed ? 'warning' : 'success');
+                bulkRenameModal.style.display = 'none';
+                selectedFiles.clear();
+                loadDirectory(currentPath || '');
+            } catch (e) {
+                console.error('Bulk rename error', e);
+                showBulkRenameError('Network error. Please try again.');
+            }
+        });
+    }
 
     function showPublishError(msg){
         if (!publishError) return;
