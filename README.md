@@ -55,6 +55,23 @@ The application is intended to run on the same server as a Plex/Emby/other media
 5. (Button click) Translate the subtitles to the target language
 6. Refresh the media player library to see the new subtitles
 
-## Roadmap
+## Naming conventions (important)
 
-- Automatic extraction, conversion and translation
+Subtitle Cockpit relies heavily on file naming to infer metadata (especially for subtitle search and publishing). You will get the best results when your filenames contain as much structured information as possible.
+
+- **Video files**
+  - Include the **movie/series name**.
+  - Include the **audio language** (if you have multiple audio tracks/variants).
+  - For series, include **season and episode** (e.g. `S01E01`).
+  - If you plan to use the **Publish** feature: the more information you include about the RIP/release, the better (e.g. `720p`, `1080p`, `bluray`, `web`, release group name).
+
+  Example:
+  - `attack.on.titan.s01e01.720p.bluray.x264.mkv`
+
+- **Subtitle files (.srt)**
+  - Make sure each subtitle filename ends with a **language code**, followed by the extension.
+  - Format: `...<anything>.<lang>.srt`
+
+  Examples:
+  - `attack.on.titan.s01e01.720p.bluray.x264.en.srt`
+  - `attack.on.titan.s01e01.720p.bluray.x264.th.srt`
