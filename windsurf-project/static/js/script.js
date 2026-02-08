@@ -13,9 +13,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const uploadProgressBar = document.getElementById('uploadProgressBar');
     const uploadProgressText = document.getElementById('uploadProgressText');
     const extractBtn = document.getElementById('extractBtn');
-    const translateBtn = document.getElementById('translateBtn');
     const supToSrtBtn = document.getElementById('supToSrtBtn');
+    const translateBtn = document.getElementById('translateBtn');
     const searchSubtitlesBtn = document.getElementById('searchSubtitlesBtn');
+    const syncSubtitlesBtn = document.getElementById('syncSubtitlesBtn');
     const filterVideoBtn = document.getElementById('filterVideoBtn');
     const filterSubtitleBtn = document.getElementById('filterSubtitleBtn');
     const filterAllBtn = document.getElementById('filterAllBtn');
@@ -130,6 +131,32 @@ document.addEventListener('DOMContentLoaded', function() {
 
             xhr.setRequestHeader('Content-Type', 'application/octet-stream');
             xhr.send(file);
+        });
+    }
+
+    if (syncSubtitlesBtn) {
+        syncSubtitlesBtn.addEventListener('click', () => {
+            if (syncSubtitlesBtn.disabled) return;
+            const subtitles = Array.from(selectedFiles);
+            (async () => {
+                try {
+                    const res = await fetch('/api/sync_subtitles', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ paths: subtitles })
+                    });
+                    const data = await res.json();
+                    if (data.error) {
+                        showToast(`Sync failed: ${data.error}`, 'error', 7000);
+                        return;
+                    }
+                    showToast(`${data.message || 'Jobs added to queue'}. View progress in the Job Queue page.`, 'success');
+                    setTimeout(() => loadDirectory(currentPath || ''), 2000);
+                } catch (e) {
+                    console.error('sync subtitles error', e);
+                    showToast('Sync failed. See console for details.', 'error');
+                }
+            })();
         });
     }
 
@@ -423,6 +450,12 @@ document.addEventListener('DOMContentLoaded', function() {
             const arr = Array.from(selectedFiles);
             const allVideo = anySelected && arr.every(isVideo);
             searchSubtitlesBtn.disabled = !allVideo;
+        }
+
+        if (syncSubtitlesBtn) {
+            const arr = Array.from(selectedFiles);
+            const allSrt = anySelected && arr.every(isSrt);
+            syncSubtitlesBtn.disabled = !allSrt;
         }
     }
 

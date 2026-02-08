@@ -34,6 +34,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const addic7edConfig = document.getElementById('addic7edConfig');
   const addic7edUsername = document.getElementById('addic7edUsername');
   const addic7edPassword = document.getElementById('addic7edPassword');
+  const syncDontFixFramerate = document.getElementById('syncDontFixFramerate');
+  const syncUseGoldenSection = document.getElementById('syncUseGoldenSection');
+  const syncVadSelect = document.getElementById('syncVadSelect');
 
   let allowedProviders = [];
   let currentSettings = null;
@@ -118,6 +121,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (maxCharsPerRequestInput) {
       maxCharsPerRequestInput.value = Number((currentSettings.max_chars_per_request && currentSettings.max_chars_per_request[curProv]) || 0);
     }
+    if (syncDontFixFramerate) syncDontFixFramerate.checked = !!currentSettings.sync_dont_fix_framerate;
+    if (syncUseGoldenSection) syncUseGoldenSection.checked = !!currentSettings.sync_use_golden_section;
+    if (syncVadSelect) syncVadSelect.value = currentSettings.sync_vad || 'default';
     renderGlobals();
     await loadVpnConfigs();
     renderKeysSection();
@@ -444,7 +450,10 @@ document.addEventListener('DOMContentLoaded', () => {
         DeepL: editedKeys.DeepL.map(copyKeyObj),
         Azure: editedKeys.Azure.map(copyKeyObj),
         Gemini: editedKeys.Gemini.map(copyKeyObj)
-      }
+      },
+      sync_dont_fix_framerate: !!(syncDontFixFramerate && syncDontFixFramerate.checked),
+      sync_use_golden_section: !!(syncUseGoldenSection && syncUseGoldenSection.checked),
+      sync_vad: (syncVadSelect ? (syncVadSelect.value || 'default') : 'default')
     };
     try {
       const res = await fetch('/api/settings', {
@@ -486,6 +495,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (geminiModelInput) {
           geminiModelInput.value = currentSettings.gemini_model || 'gemini-2.0-flash';
         }
+        if (syncDontFixFramerate) syncDontFixFramerate.checked = !!currentSettings.sync_dont_fix_framerate;
+        if (syncUseGoldenSection) syncUseGoldenSection.checked = !!currentSettings.sync_use_golden_section;
+        if (syncVadSelect) syncVadSelect.value = currentSettings.sync_vad || 'default';
         await loadVpnConfigs();
         renderKeysSection();
         setStatus('Saved');

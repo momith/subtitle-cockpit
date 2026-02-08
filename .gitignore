@@ -7,3 +7,6 @@ __pycache__/
 
 venv/
 **/venv/
+
+autosubsync/
+windsurf-project/test/

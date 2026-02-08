@@ -12,7 +12,7 @@ from datetime import timedelta
 from PIL import Image
 import pytesseract
 import logging
-from job_queue import get_job_queue, JOB_TYPE_SUP_TO_SRT, JOB_TYPE_TRANSLATE, JOB_TYPE_EXTRACT, JOB_TYPE_SEARCH_SUBTITLES
+from job_queue import get_job_queue, JOB_TYPE_SUP_TO_SRT, JOB_TYPE_TRANSLATE, JOB_TYPE_EXTRACT, JOB_TYPE_SEARCH_SUBTITLES, JOB_TYPE_SYNC_SUBTITLES
 
 logging.basicConfig(level=logging.INFO)
 
@@ -151,6 +151,9 @@ def _default_settings():
         'excluded_file_types': '',
         'max_parallel_jobs': 1,
         'subtitle_max_downloads': 1,
+        'sync_dont_fix_framerate': False,
+        'sync_use_golden_section': False,
+        'sync_vad': 'default',
         'provider': 'DeepL',
         'translation_target_language': '',
         'ocr_source_language': 'eng',
@@ -324,6 +327,9 @@ def read_settings():
                 'excluded_file_types': excluded_file_types,
                 'max_parallel_jobs': max_parallel_jobs,
                 'subtitle_max_downloads': subtitle_max_downloads,
+                'sync_dont_fix_framerate': bool(data.get('sync_dont_fix_framerate', base.get('sync_dont_fix_framerate', False))),
+                'sync_use_golden_section': bool(data.get('sync_use_golden_section', base.get('sync_use_golden_section', False))),
+                'sync_vad': str(data.get('sync_vad', base.get('sync_vad', 'default')) or 'default'),
                 'provider': provider,
                 'translation_target_language': translation_target_language,
                 'ocr_source_language': ocr_source_language,
@@ -482,12 +488,19 @@ def api_settings():
     if subtitle_max_downloads < 1:
         subtitle_max_downloads = 1
 
+    sync_dont_fix_framerate = bool(payload.get('sync_dont_fix_framerate', existing.get('sync_dont_fix_framerate', False)))
+    sync_use_golden_section = bool(payload.get('sync_use_golden_section', existing.get('sync_use_golden_section', False)))
+    sync_vad = str(payload.get('sync_vad', existing.get('sync_vad', 'default')) or 'default')
+
     new_settings = {
         'root_dir': root_dir,
         'mullvad_vpn_config_dir': mullvad_vpn_config_dir,
         'excluded_file_types': excluded_file_types,
         'max_parallel_jobs': max_parallel_jobs,
         'subtitle_max_downloads': subtitle_max_downloads,
+        'sync_dont_fix_framerate': sync_dont_fix_framerate,
+        'sync_use_golden_section': sync_use_golden_section,
+        'sync_vad': sync_vad,
         'provider': provider,
         'translation_target_language': translation_target_language,
         'ocr_source_language': ocr_source_language,
@@ -1148,6 +1161,63 @@ def search_subtitles():
 
     return jsonify({
         'message': f'Added {len(added_jobs)} subtitle search job(s) to queue',
+        'jobs': added_jobs,
+        'errors': errors if errors else None
+    })
+
+
+@app.route('/api/sync_subtitles', methods=['POST'])
+def sync_subtitles():
+    """Queue subtitle sync jobs (ffsubsync)"""
+    if not job_queue:
+        init_job_queue()
+
+    data = request.get_json(silent=True) or {}
+    paths = data.get('paths', [])
+
+    if not isinstance(paths, list) or len(paths) == 0:
+        return jsonify({'error': 'No subtitle files provided'}), 400
+
+    settings = read_settings()
+    base_dir = settings.get('root_dir') or app.config.get('BASE_DIR')
+    if not base_dir:
+        return jsonify({'error': 'Base directory not configured'}), 400
+
+    added_jobs = []
+    errors = []
+
+    for rel_path in paths:
+        try:
+            safe_rel = rel_path.lstrip('/').replace('..', '')
+            abs_path = os.path.join(base_dir, safe_rel)
+
+            if not os.path.isfile(abs_path):
+                errors.append({'path': rel_path, 'message': 'File not found'})
+                continue
+
+            if not safe_rel.lower().endswith('.srt'):
+                errors.append({'path': rel_path, 'message': 'Only SRT subtitles are supported'})
+                continue
+
+            job_id = job_queue.add_job(
+                JOB_TYPE_SYNC_SUBTITLES,
+                safe_rel,
+                params={
+                    'base_dir': base_dir,
+                    'settings_file': SETTINGS_FILE
+                }
+            )
+            added_jobs.append({'path': rel_path, 'job_id': job_id})
+
+        except Exception as e:
+            logging.exception(f'Error adding sync job for {rel_path}: {e}')
+            errors.append({'path': rel_path, 'message': str(e)})
+
+    if errors and not added_jobs:
+        return jsonify({'error': 'Failed to add sync job(s)', 'details': errors}), 500
+
+    return jsonify({
+        'message': f'Added {len(added_jobs)} sync job(s) to queue',
         'jobs': added_jobs,
         'errors': errors if errors else None
     })
