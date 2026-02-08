@@ -771,6 +771,15 @@ class JobQueue:
         settings_file = params.get('settings_file')
         target = params.get('target') or {}
 
+        logging.info(
+            'Publish job starting for %s (target type=%s tmdb_id=%s imdb_id=%s title=%s)',
+            file_path,
+            (target or {}).get('type'),
+            (target or {}).get('tmdb_id'),
+            (target or {}).get('imdb_id'),
+            (target or {}).get('title')
+        )
+
         if not base_dir or not settings_file:
             raise ValueError('Missing required parameters: base_dir, settings_file')
 
@@ -796,8 +805,13 @@ class JobQueue:
         if subdl_enabled and subdl_token:
             attempted.append('subdl')
             try:
+                logging.info('Publish attempting provider=subdl for %s', file_path)
                 upload_result = self._publish_to_subdl(abs_path, target, subdl_token, guessit, Language)
                 succeeded.append({'provider': 'subdl', 'result': upload_result})
+                msg = None
+                if isinstance(upload_result, dict):
+                    msg = upload_result.get('message') or upload_result.get('msg')
+                logging.info('Publish succeeded provider=subdl for %s%s', file_path, (f" (message={msg})" if msg else ''))
             except Exception as e:
                 logging.exception(f'SubDL publish failed for {file_path}: {e}')
                 failed.append({'provider': 'subdl', 'error': str(e)})
@@ -812,6 +826,14 @@ class JobQueue:
             if failed:
                 msg += ': ' + '; '.join([f"{x.get('provider')}: {x.get('error')}" for x in failed])
             raise RuntimeError(msg)
+
+        logging.info(
+            'Publish job finished for %s (attempted=%s succeeded=%s failed=%s)',
+            file_path,
+            ','.join(attempted),
+            ','.join([x.get('provider') for x in succeeded]),
+            ','.join([x.get('provider') for x in failed])
+        )
 
         return {
             'path': file_path,
@@ -835,6 +857,7 @@ class JobQueue:
         bearer = f'Bearer {bare}'
 
         # Step 1: get n_id
+        logging.info('SubDL step1 getNId (file=%s)', os.path.basename(subtitle_abs_path))
         r1 = requests.get(
             'https://api3.subdl.com/user/getNId',
             headers={'token': bare},
@@ -845,8 +868,18 @@ class JobQueue:
         if not p1.get('ok') or not p1.get('n_id'):
             raise RuntimeError(p1.get('error') or 'Failed to get SubDL n_id')
         n_id = p1.get('n_id')
+        logging.info('SubDL step1 ok (n_id=%s)', n_id)
 
         # Step 2: upload file
+        try:
+            size = os.path.getsize(subtitle_abs_path)
+        except Exception:
+            size = None
+        logging.info(
+            'SubDL step2 uploadSingleSubtitle (filename=%s size=%s)',
+            os.path.basename(subtitle_abs_path),
+            str(size) if size is not None else 'unknown'
+        )
         with open(subtitle_abs_path, 'rb') as f:
             files = {'subtitle': (os.path.basename(subtitle_abs_path), f)}
             data = {'n_id': n_id}
@@ -867,6 +900,7 @@ class JobQueue:
         file_n_id = file_info.get('file_n_id')
         if not file_n_id:
             raise RuntimeError('Missing file_n_id from SubDL uploadSingleSubtitle response')
+        logging.info('SubDL step2 ok (file_n_id=%s)', file_n_id)
 
         # Infer metadata from filename
         base = os.path.basename(subtitle_abs_path)
@@ -969,6 +1003,21 @@ class JobQueue:
             if ee_i is not None:
                 form['ee'] = ee_i
 
+        logging.info(
+            'SubDL step3 uploadSubtitle (type=%s lang=%s quality=%s season=%s ef=%s ee=%s tmdb_id=%s imdb_id=%s name=%s releases_count=%s hi=%s)',
+            content_type,
+            lang,
+            quality,
+            form.get('season'),
+            form.get('ef'),
+            form.get('ee'),
+            form.get('tmdb_id'),
+            form.get('imdb_id'),
+            form.get('name'),
+            len(json.loads(form.get('releases') or '[]')),
+            form.get('hi')
+        )
+
         r3 = requests.post(
             'https://api3.subdl.com/user/uploadSubtitle',
             headers={'token': bearer},
@@ -984,11 +1033,14 @@ class JobQueue:
         if isinstance(p3, dict):
             if not p3.get('status'):
                 raise RuntimeError(p3.get('message') or 'SubDL uploadSubtitle failed')
+            logging.info('SubDL step3 ok (message=%s)', p3.get('message') or p3.get('msg') or '')
             return p3
 
         text = (r3.text or '').strip()
         if text:
+            logging.info('SubDL step3 ok (text_response=%s)', text[:300])
             return {'status': True, 'message': text}
+        logging.info('SubDL step3 ok (empty_response=subtitle sent for review)')
         return {'status': True, 'message': 'subtitle sent for review'}
 
     def _translate_with_google_local(self, source_path, dest_path, target_lang):
