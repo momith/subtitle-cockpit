@@ -34,6 +34,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const addic7edConfig = document.getElementById('addic7edConfig');
   const addic7edUsername = document.getElementById('addic7edUsername');
   const addic7edPassword = document.getElementById('addic7edPassword');
+  const subdlEnabled = document.getElementById('subdlEnabled');
+  const subdlConfig = document.getElementById('subdlConfig');
+  const subdlApiKey = document.getElementById('subdlApiKey');
   const syncDontFixFramerate = document.getElementById('syncDontFixFramerate');
   const syncUseGoldenSection = document.getElementById('syncUseGoldenSection');
   const syncVadSelect = document.getElementById('syncVadSelect');
@@ -52,6 +55,12 @@ document.addEventListener('DOMContentLoaded', () => {
   function setStatus(msg, timeout=2000) {
     statusMsg.textContent = msg;
     if (timeout) setTimeout(() => { statusMsg.textContent = ''; }, timeout);
+  }
+
+  function parseSubtitleSearchLanguages() {
+    const raw = (subtitleSearchLanguagesInput && subtitleSearchLanguagesInput.value) ? subtitleSearchLanguagesInput.value : '';
+    const arr = raw.split(',').map(s => s.trim()).filter(Boolean);
+    return arr.length > 0 ? arr : ['en'];
   }
 
   async function loadSettings() {
@@ -98,9 +107,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (extractionSourceLanguageInput) {
       extractionSourceLanguageInput.value = currentSettings.extraction_source_language || 'eng';
     }
-    // subtitle search languages (read-only in UI)
+    // subtitle search languages
     const subLangs = currentSettings.subtitle_search_languages || ['en'];
-    subtitleSearchLanguagesInput.value = Array.isArray(subLangs) ? subLangs.join(', ') : subLangs;
+    subtitleSearchLanguagesInput.value = Array.isArray(subLangs) ? subLangs.join(', ') : String(subLangs || '');
     // subtitle max downloads
     subtitleMaxDownloadsInput.value = Number(currentSettings.subtitle_max_downloads || 1);
     // subtitle providers
@@ -115,6 +124,10 @@ document.addEventListener('DOMContentLoaded', () => {
     addic7edUsername.value = a7Config.username || '';
     addic7edPassword.value = a7Config.password || '';
     addic7edConfig.style.display = a7Config.enabled ? 'block' : 'none';
+    const subdl = subProviders.subdl || {};
+    if (subdlEnabled) subdlEnabled.checked = subdl.enabled || false;
+    if (subdlApiKey) subdlApiKey.value = subdl.api_key || '';
+    if (subdlConfig) subdlConfig.style.display = (subdlEnabled && subdlEnabled.checked) ? 'block' : 'none';
     // set wait ms for current provider
     const curProv = (currentSettings && currentSettings.provider) || (allowedProviders[0] || '');
     waitMsInput.value = Number((currentSettings.wait_ms && currentSettings.wait_ms[curProv]) || 0);
@@ -409,8 +422,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     
-    // Subtitle search languages: keep existing value (field is read-only)
-    const subLangs = currentSettings.subtitle_search_languages || ['en'];
+    const subLangs = parseSubtitleSearchLanguages();
     
     const payload = {
       provider: providerSelect.value,
@@ -436,10 +448,13 @@ document.addEventListener('DOMContentLoaded', () => {
           password: (opensubtitlesPassword.value || '').trim()
         },
         addic7ed: {
-          // Keep existing Addic7ed config (UI is read-only)
-          enabled: !!((currentSettings.subtitle_providers && currentSettings.subtitle_providers.addic7ed && currentSettings.subtitle_providers.addic7ed.enabled) || false),
-          username: (currentSettings.subtitle_providers && currentSettings.subtitle_providers.addic7ed && currentSettings.subtitle_providers.addic7ed.username) || '',
-          password: (currentSettings.subtitle_providers && currentSettings.subtitle_providers.addic7ed && currentSettings.subtitle_providers.addic7ed.password) || ''
+          enabled: !!addic7edEnabled.checked,
+          username: (addic7edUsername.value || '').trim(),
+          password: (addic7edPassword.value || '').trim()
+        },
+        subdl: {
+          enabled: !!(subdlEnabled && subdlEnabled.checked),
+          api_key: (subdlApiKey ? (subdlApiKey.value || '').trim() : '')
         }
       },
       wait_ms: editedWaitMs,
@@ -518,6 +533,12 @@ document.addEventListener('DOMContentLoaded', () => {
   addic7edEnabled.addEventListener('change', () => {
     addic7edConfig.style.display = addic7edEnabled.checked ? 'block' : 'none';
   });
+
+  if (subdlEnabled) {
+    subdlEnabled.addEventListener('change', () => {
+      if (subdlConfig) subdlConfig.style.display = subdlEnabled.checked ? 'block' : 'none';
+    });
+  }
 
   function renderGlobals(){
     autoSwitchOnError.checked = !!currentSettings.auto_switch_on_error;

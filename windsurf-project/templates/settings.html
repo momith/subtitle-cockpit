@@ -110,8 +110,8 @@
             
             <div class="row">
                 <label for="subtitleSearchLanguagesInput">Subtitle search languages (comma-separated)</label>
-                <input id="subtitleSearchLanguagesInput" type="text" placeholder="e.g. en, de, fr..." disabled style="background-color:#f5f5f5; cursor:not-allowed;" />
-                <div class="small muted">Language codes for automatic subtitle search (currently fixed).</div>
+                <input id="subtitleSearchLanguagesInput" type="text" placeholder="e.g. en, de, fr..." />
+                <div class="small muted">Language codes for automatic subtitle search.</div>
             </div>
 
             <div class="row">
@@ -144,19 +144,33 @@
             
             <div class="row">
                 <label>
-                    <input type="checkbox" id="addic7edEnabled" style="width: auto; margin-right: 8px;" disabled />
+                    <input type="checkbox" id="addic7edEnabled" style="width: auto; margin-right: 8px;" />
                     Enable Addic7ed
                 </label>
-                <div class="small muted" style="margin-left: 24px;">Addic7ed configuration is currently locked.</div>
+                <div class="small muted" style="margin-left: 24px;">Sign up at <a href="https://www.addic7ed.com" target="_blank">addic7ed.com</a></div>
             </div>
             <div class="row indented" id="addic7edConfig" style="display: none;">
                 <div style="margin-bottom: 8px;">
                     <label for="addic7edUsername">Username</label>
-                    <input id="addic7edUsername" type="text" placeholder="Addic7ed username" disabled style="background-color:#f5f5f5; cursor:not-allowed;" />
+                    <input id="addic7edUsername" type="text" placeholder="Addic7ed username" />
                 </div>
                 <div>
                     <label for="addic7edPassword">Password</label>
-                    <input id="addic7edPassword" type="password" placeholder="Addic7ed password" disabled style="background-color:#f5f5f5; cursor:not-allowed;" />
+                    <input id="addic7edPassword" type="password" placeholder="Addic7ed password" />
+                </div>
+            </div>
+
+            <div class="row" style="margin-top: 10px;">
+                <label>
+                    <input type="checkbox" id="subdlEnabled" style="width: auto; margin-right: 8px;" />
+                    Enable SubDL
+                </label>
+                <div class="small muted" style="margin-left: 24px;">Create an API key at <a href="https://subdl.com/panel/api" target="_blank">subdl.com</a></div>
+            </div>
+            <div class="row indented" id="subdlConfig" style="display: none;">
+                <div>
+                    <label for="subdlApiKey">API Key</label>
+                    <input id="subdlApiKey" type="password" placeholder="SubDL API key" />
                 </div>
             </div>
             

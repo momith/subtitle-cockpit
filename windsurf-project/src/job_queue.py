@@ -592,22 +592,26 @@ class JobQueue:
 
         os_config = subtitle_providers.get('opensubtitles', {})
         a7_config = subtitle_providers.get('addic7ed', {})
+        subdl_config = subtitle_providers.get('subdl', {})
 
         enabled_providers = []
         if os_config.get('enabled') and os_config.get('username') and os_config.get('password'):
             enabled_providers.append('opensubtitles')
         if a7_config.get('enabled') and a7_config.get('username') and a7_config.get('password'):
             enabled_providers.append('addic7ed')
+        if subdl_config.get('enabled') and subdl_config.get('api_key'):
+            enabled_providers.append('subdl')
 
         if not enabled_providers:
-            raise RuntimeError('No subtitle providers are configured. Please enable and configure OpenSubtitles or Addic7ed in Settings.')
+            raise RuntimeError('No subtitle providers are configured. Please enable and configure OpenSubtitles, Addic7ed, or SubDL in Settings.')
 
         # Build searcher
         searcher = SubtitleSearcher(
             opensubtitles_username=os_config.get('username') if 'opensubtitles' in enabled_providers else None,
             opensubtitles_password=os_config.get('password') if 'opensubtitles' in enabled_providers else None,
             addic7ed_username=a7_config.get('username') if 'addic7ed' in enabled_providers else None,
-            addic7ed_password=a7_config.get('password') if 'addic7ed' in enabled_providers else None
+            addic7ed_password=a7_config.get('password') if 'addic7ed' in enabled_providers else None,
+            subdl_api_key=subdl_config.get('api_key') if 'subdl' in enabled_providers else None
         )
 
         logging.info(f'Searching subtitles (job) for: {abs_path}')

@@ -172,6 +172,10 @@ def _default_settings():
                 'enabled': False,
                 'username': '',
                 'password': ''
+            },
+            'subdl': {
+                'enabled': False,
+                'api_key': ''
             }
         },
         'auto_switch_on_error': False,
@@ -279,6 +283,10 @@ def read_settings():
                     'enabled': bool(data_providers.get('addic7ed', {}).get('enabled', base_providers.get('addic7ed', {}).get('enabled', False))),
                     'username': str(data_providers.get('addic7ed', {}).get('username', base_providers.get('addic7ed', {}).get('username', ''))),
                     'password': str(data_providers.get('addic7ed', {}).get('password', base_providers.get('addic7ed', {}).get('password', '')))
+                },
+                'subdl': {
+                    'enabled': bool(data_providers.get('subdl', {}).get('enabled', base_providers.get('subdl', {}).get('enabled', False))),
+                    'api_key': str(data_providers.get('subdl', {}).get('api_key', base_providers.get('subdl', {}).get('api_key', '')))
                 }
             }
             # Auto switch
@@ -474,6 +482,10 @@ def api_settings():
             'enabled': bool((payload_providers.get('addic7ed') or {}).get('enabled', (existing_providers.get('addic7ed') or {}).get('enabled', False))),
             'username': str((payload_providers.get('addic7ed') or {}).get('username', (existing_providers.get('addic7ed') or {}).get('username', ''))),
             'password': str((payload_providers.get('addic7ed') or {}).get('password', (existing_providers.get('addic7ed') or {}).get('password', '')))
+        },
+        'subdl': {
+            'enabled': bool((payload_providers.get('subdl') or {}).get('enabled', (existing_providers.get('subdl') or {}).get('enabled', False))),
+            'api_key': str((payload_providers.get('subdl') or {}).get('api_key', (existing_providers.get('subdl') or {}).get('api_key', '')))
         }
     }
     
