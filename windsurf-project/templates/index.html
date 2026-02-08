@@ -81,6 +81,9 @@
             <button id="syncSubtitlesBtn" class="btn" disabled>
                 <i class="fas fa-sync-alt"></i> Sync Subtitles
             </button>
+            <button id="publishSubtitlesBtn" class="btn" disabled>
+                <i class="fas fa-cloud-upload-alt"></i> Publish Subtitle
+            </button>
         </div>
         
         <div class="filter-toolbar" style="margin-top:12px; display:flex; gap:8px; align-items:center;">
@@ -100,6 +103,56 @@
             </div>
             <div id="fileList" class="file-list-content">
                 <!-- Files and folders will be loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Publish Subtitle Modal -->
+    <div id="publishModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-cloud-upload-alt"></i> Publish Subtitle</h3>
+                <button class="modal-close" id="publishModalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="margin-bottom: 12px; color: #666;">
+                    Select the movie/series and provide an identifier (TMDB recommended). Publishing will try all enabled providers that support uploads.
+                </div>
+
+                <label for="imdbSearchInput" style="display: block; font-weight: 600; margin-bottom: 8px;">Search IMDb</label>
+                <input type="text" id="imdbSearchInput" placeholder="Type at least 2 characters..." style="width: 100%; padding: 8px; border: 1px solid #e1e4e8; border-radius: 6px;">
+                <div id="imdbSearchResults" style="display:none; border:1px solid #e1e4e8; border-radius:6px; margin-top:6px; max-height:220px; overflow:auto; background:#fff;"></div>
+
+                <div class="grid" style="margin-top: 14px; gap: 10px;">
+                    <div class="grid grid-2">
+                        <div>
+                            <label for="publishTypeSelect">Type</label>
+                            <select id="publishTypeSelect">
+                                <option value="movie">Movie</option>
+                                <option value="tv">TV</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="publishTmdbId">TMDB ID</label>
+                            <input id="publishTmdbId" type="text" placeholder="e.g. 822119" />
+                        </div>
+                    </div>
+                    <div class="grid grid-2">
+                        <div>
+                            <label for="publishImdbId">IMDb ID</label>
+                            <input id="publishImdbId" type="text" placeholder="e.g. tt1375666" />
+                        </div>
+                        <div>
+                            <label for="publishTitle">Title</label>
+                            <input id="publishTitle" type="text" placeholder="Title" />
+                        </div>
+                    </div>
+                    <div id="publishError" style="display:none; margin-top: 8px; padding: 8px; background: #fee; border: 1px solid #fcc; border-radius: 4px; color: #c33;"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="publishConfirmBtn" class="btn"><i class="fas fa-check"></i> Publish</button>
+                <button id="publishCancelBtn" class="btn"><i class="fas fa-times"></i> Cancel</button>
             </div>
         </div>
     </div>

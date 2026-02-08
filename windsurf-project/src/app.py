@@ -12,7 +12,7 @@ from datetime import timedelta
 from PIL import Image
 import pytesseract
 import logging
-from job_queue import get_job_queue, JOB_TYPE_SUP_TO_SRT, JOB_TYPE_TRANSLATE, JOB_TYPE_EXTRACT, JOB_TYPE_SEARCH_SUBTITLES, JOB_TYPE_SYNC_SUBTITLES
+from job_queue import get_job_queue, JOB_TYPE_SUP_TO_SRT, JOB_TYPE_TRANSLATE, JOB_TYPE_EXTRACT, JOB_TYPE_SEARCH_SUBTITLES, JOB_TYPE_SYNC_SUBTITLES, JOB_TYPE_PUBLISH_SUBTITLES
 
 logging.basicConfig(level=logging.INFO)
 
@@ -175,7 +175,8 @@ def _default_settings():
             },
             'subdl': {
                 'enabled': False,
-                'api_key': ''
+                'api_key': '',
+                'upload_token': ''
             }
         },
         'auto_switch_on_error': False,
@@ -286,7 +287,8 @@ def read_settings():
                 },
                 'subdl': {
                     'enabled': bool(data_providers.get('subdl', {}).get('enabled', base_providers.get('subdl', {}).get('enabled', False))),
-                    'api_key': str(data_providers.get('subdl', {}).get('api_key', base_providers.get('subdl', {}).get('api_key', '')))
+                    'api_key': str(data_providers.get('subdl', {}).get('api_key', base_providers.get('subdl', {}).get('api_key', ''))),
+                    'upload_token': str(data_providers.get('subdl', {}).get('upload_token', base_providers.get('subdl', {}).get('upload_token', '')))
                 }
             }
             # Auto switch
@@ -485,7 +487,8 @@ def api_settings():
         },
         'subdl': {
             'enabled': bool((payload_providers.get('subdl') or {}).get('enabled', (existing_providers.get('subdl') or {}).get('enabled', False))),
-            'api_key': str((payload_providers.get('subdl') or {}).get('api_key', (existing_providers.get('subdl') or {}).get('api_key', '')))
+            'api_key': str((payload_providers.get('subdl') or {}).get('api_key', (existing_providers.get('subdl') or {}).get('api_key', ''))),
+            'upload_token': str((payload_providers.get('subdl') or {}).get('upload_token', (existing_providers.get('subdl') or {}).get('upload_token', '')))
         }
     }
     
@@ -1230,6 +1233,121 @@ def sync_subtitles():
 
     return jsonify({
         'message': f'Added {len(added_jobs)} sync job(s) to queue',
+        'jobs': added_jobs,
+        'errors': errors if errors else None
+    })
+
+
+@app.route('/api/imdb_suggest', methods=['GET'])
+def imdb_suggest():
+    """Proxy IMDb title suggestions for the publish modal."""
+    import requests
+    from urllib.parse import quote
+
+    q = (request.args.get('q') or '').strip()
+    if len(q) < 2:
+        return jsonify({'results': []})
+
+    # IMDb public suggestion API (unofficial but widely used)
+    # Example: https://v2.sg.media-imdb.com/suggestion/i/inception.json
+    first = q[0].lower()
+    url = f'https://v2.sg.media-imdb.com/suggestion/{first}/{quote(q)}.json'
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        payload = r.json() or {}
+    except Exception as e:
+        logging.exception(f'IMDb suggest failed: {e}')
+        return jsonify({'error': 'IMDb suggest failed'}), 500
+
+    out = []
+    for item in (payload.get('d') or []):
+        imdb_id = item.get('id')
+        title = item.get('l')
+        if not imdb_id or not title:
+            continue
+        out.append({
+            'imdb_id': str(imdb_id),
+            'title': str(title),
+            'year': item.get('y'),
+            'kind': item.get('q'),
+            'cast': item.get('s')
+        })
+
+    return jsonify({'results': out})
+
+
+@app.route('/api/publish_subtitles', methods=['POST'])
+def publish_subtitles():
+    """Queue subtitle publish jobs (uploads to enabled providers that support upload)."""
+    if not job_queue:
+        init_job_queue()
+
+    data = request.get_json(silent=True) or {}
+    paths = data.get('paths', [])
+    target = data.get('target', {}) or {}
+
+    if not isinstance(paths, list) or len(paths) == 0:
+        return jsonify({'error': 'No subtitle files provided'}), 400
+
+    settings = read_settings()
+    base_dir = settings.get('root_dir') or app.config.get('BASE_DIR')
+    if not base_dir:
+        return jsonify({'error': 'Base directory not configured'}), 400
+
+    # Basic validation of target metadata (SubDL needs at least type and an id)
+    content_type = str(target.get('type') or '').strip().lower()
+    tmdb_id = str(target.get('tmdb_id') or '').strip()
+    imdb_id = str(target.get('imdb_id') or '').strip()
+    title = str(target.get('title') or '').strip()
+
+    if content_type not in ['movie', 'tv']:
+        return jsonify({'error': 'Invalid target type. Must be "movie" or "tv".'}), 400
+    if not tmdb_id and not imdb_id:
+        return jsonify({'error': 'Missing target id. Provide tmdb_id or imdb_id.'}), 400
+
+    added_jobs = []
+    errors = []
+
+    allowed_exts = ('.srt', '.ass', '.ssa', '.sub')
+    for rel_path in paths:
+        try:
+            safe_rel = rel_path.lstrip('/').replace('..', '')
+            abs_path = os.path.join(base_dir, safe_rel)
+
+            if not os.path.isfile(abs_path):
+                errors.append({'path': rel_path, 'message': 'File not found'})
+                continue
+
+            if not safe_rel.lower().endswith(allowed_exts):
+                errors.append({'path': rel_path, 'message': 'Unsupported subtitle format'})
+                continue
+
+            job_id = job_queue.add_job(
+                JOB_TYPE_PUBLISH_SUBTITLES,
+                safe_rel,
+                params={
+                    'base_dir': base_dir,
+                    'settings_file': SETTINGS_FILE,
+                    'target': {
+                        'type': content_type,
+                        'tmdb_id': tmdb_id,
+                        'imdb_id': imdb_id,
+                        'title': title,
+                        'year': target.get('year')
+                    }
+                }
+            )
+            added_jobs.append({'path': rel_path, 'job_id': job_id})
+        except Exception as e:
+            logging.exception(f'Error adding publish job for {rel_path}: {e}')
+            errors.append({'path': rel_path, 'message': str(e)})
+
+    if errors and not added_jobs:
+        return jsonify({'error': 'Failed to add publish job(s)', 'details': errors}), 500
+
+    return jsonify({
+        'message': f'Added {len(added_jobs)} publish job(s) to queue',
         'jobs': added_jobs,
         'errors': errors if errors else None
     })

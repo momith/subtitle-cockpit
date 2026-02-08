@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const subdlEnabled = document.getElementById('subdlEnabled');
   const subdlConfig = document.getElementById('subdlConfig');
   const subdlApiKey = document.getElementById('subdlApiKey');
+  const subdlUploadToken = document.getElementById('subdlUploadToken');
   const syncDontFixFramerate = document.getElementById('syncDontFixFramerate');
   const syncUseGoldenSection = document.getElementById('syncUseGoldenSection');
   const syncVadSelect = document.getElementById('syncVadSelect');
@@ -127,6 +128,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const subdl = subProviders.subdl || {};
     if (subdlEnabled) subdlEnabled.checked = subdl.enabled || false;
     if (subdlApiKey) subdlApiKey.value = subdl.api_key || '';
+    if (subdlUploadToken) subdlUploadToken.value = subdl.upload_token || '';
     if (subdlConfig) subdlConfig.style.display = (subdlEnabled && subdlEnabled.checked) ? 'block' : 'none';
     // set wait ms for current provider
     const curProv = (currentSettings && currentSettings.provider) || (allowedProviders[0] || '');
@@ -454,7 +456,8 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         subdl: {
           enabled: !!(subdlEnabled && subdlEnabled.checked),
-          api_key: (subdlApiKey ? (subdlApiKey.value || '').trim() : '')
+          api_key: (subdlApiKey ? (subdlApiKey.value || '').trim() : ''),
+          upload_token: (subdlUploadToken ? (subdlUploadToken.value || '').trim() : '')
         }
       },
       wait_ms: editedWaitMs,

@@ -26,6 +26,7 @@ JOB_TYPE_SUP_TO_SRT = 'sup_to_srt'
 JOB_TYPE_TRANSLATE = 'translate'
 JOB_TYPE_SEARCH_SUBTITLES = 'search_subtitles'
 JOB_TYPE_SYNC_SUBTITLES = 'sync_subtitles'
+JOB_TYPE_PUBLISH_SUBTITLES = 'publish_subtitles'
 
 # Timeout configurations per job type (in seconds)
 JOB_TIMEOUTS = {
@@ -33,7 +34,8 @@ JOB_TIMEOUTS = {
     JOB_TYPE_SUP_TO_SRT: 600,       # 10 minutes
     JOB_TYPE_TRANSLATE: 1800,       # 30 minutes
     JOB_TYPE_SEARCH_SUBTITLES: 600,  # 10 minutes
-    JOB_TYPE_SYNC_SUBTITLES: 1800    # 30 minutes
+    JOB_TYPE_SYNC_SUBTITLES: 1800,    # 30 minutes
+    JOB_TYPE_PUBLISH_SUBTITLES: 600   # 10 minutes
 }
 
 
@@ -312,6 +314,8 @@ class JobQueue:
                 result = self._execute_search_subtitles(file_path, params)
             elif job_type == JOB_TYPE_SYNC_SUBTITLES:
                 result = self._execute_sync_subtitles(file_path, params)
+            elif job_type == JOB_TYPE_PUBLISH_SUBTITLES:
+                result = self._execute_publish_subtitles(file_path, params)
             else:
                 raise ValueError(f'Unknown job type: {job_type}')
             
@@ -756,6 +760,237 @@ class JobQueue:
             }
         }
     
+    def _execute_publish_subtitles(self, file_path: str, params: Dict) -> Dict:
+        """Execute subtitle publish job (uploads to enabled providers that support upload)."""
+        import json
+        import requests
+        from guessit import guessit
+        from babelfish import Language
+
+        base_dir = params.get('base_dir')
+        settings_file = params.get('settings_file')
+        target = params.get('target') or {}
+
+        if not base_dir or not settings_file:
+            raise ValueError('Missing required parameters: base_dir, settings_file')
+
+        abs_path = os.path.join(base_dir, file_path)
+        if not os.path.isfile(abs_path):
+            raise FileNotFoundError(f'Subtitle file not found: {abs_path}')
+
+        if not os.path.exists(settings_file):
+            raise FileNotFoundError(f'Settings file not found: {settings_file}')
+        with open(settings_file, 'r', encoding='utf-8') as f:
+            settings = json.load(f)
+
+        subtitle_providers = settings.get('subtitle_providers', {})
+        subdl_config = subtitle_providers.get('subdl', {}) or {}
+
+        attempted = []
+        succeeded = []
+        failed = []
+
+        # Only SubDL upload is implemented right now
+        subdl_enabled = bool(subdl_config.get('enabled'))
+        subdl_token = str(subdl_config.get('upload_token') or '').strip()
+        if subdl_enabled and subdl_token:
+            attempted.append('subdl')
+            try:
+                upload_result = self._publish_to_subdl(abs_path, target, subdl_token, guessit, Language)
+                succeeded.append({'provider': 'subdl', 'result': upload_result})
+            except Exception as e:
+                logging.exception(f'SubDL publish failed for {file_path}: {e}')
+                failed.append({'provider': 'subdl', 'error': str(e)})
+        else:
+            logging.info('SubDL publish skipped (not enabled or missing upload token)')
+
+        if not attempted:
+            raise RuntimeError('No enabled subtitle providers support publishing, or required credentials are missing.')
+
+        if len(succeeded) == 0:
+            msg = 'Publishing failed for all providers'
+            if failed:
+                msg += ': ' + '; '.join([f"{x.get('provider')}: {x.get('error')}" for x in failed])
+            raise RuntimeError(msg)
+
+        return {
+            'path': file_path,
+            'attempted': attempted,
+            'succeeded': succeeded,
+            'failed': failed
+        }
+
+    def _publish_to_subdl(self, subtitle_abs_path: str, target: Dict, token: str, guessit_func, LanguageCls) -> Dict:
+        import os
+        import json
+        import requests
+        import re
+
+        t = (token or '').strip()
+        bearer = t
+        if t.lower().startswith('bearer '):
+            bare = t[7:].strip()
+        else:
+            bare = t
+        bearer = f'Bearer {bare}'
+
+        # Step 1: get n_id
+        r1 = requests.get(
+            'https://api3.subdl.com/user/getNId',
+            headers={'token': bare},
+            timeout=30
+        )
+        r1.raise_for_status()
+        p1 = r1.json() or {}
+        if not p1.get('ok') or not p1.get('n_id'):
+            raise RuntimeError(p1.get('error') or 'Failed to get SubDL n_id')
+        n_id = p1.get('n_id')
+
+        # Step 2: upload file
+        with open(subtitle_abs_path, 'rb') as f:
+            files = {'subtitle': (os.path.basename(subtitle_abs_path), f)}
+            data = {'n_id': n_id}
+            r2 = requests.post(
+                'https://api3.subdl.com/user/uploadSingleSubtitle',
+                headers={'token': bare},
+                files=files,
+                data=data,
+                timeout=120
+            )
+
+        r2.raise_for_status()
+        p2 = r2.json() or {}
+        if not p2.get('ok'):
+            raise RuntimeError(p2.get('error') or 'Failed to upload subtitle file')
+
+        file_info = p2.get('file') or {}
+        file_n_id = file_info.get('file_n_id')
+        if not file_n_id:
+            raise RuntimeError('Missing file_n_id from SubDL uploadSingleSubtitle response')
+
+        # Infer metadata from filename
+        base = os.path.basename(subtitle_abs_path)
+        stem, _ext = os.path.splitext(base)
+
+        # Language guess from filename: *.en.srt, *.eng.srt
+        lang_guess = None
+        m = re.search(r'\.([a-zA-Z]{2,3})(?:\.[0-9]+)?$', stem)
+        if m:
+            lang_guess = m.group(1)
+
+        lang = 'EN'
+        if lang_guess:
+            try:
+                code = str(lang_guess).strip().replace('-', '_')
+                if len(code) == 2:
+                    lang = LanguageCls.fromalpha2(code.lower()).alpha2.upper()
+                elif len(code) == 3:
+                    lang = LanguageCls.fromalpha3(code.lower()).alpha2.upper()
+                else:
+                    lang = code.upper()
+            except Exception:
+                lang = str(lang_guess).upper()
+
+        # release string: try stripping language suffix
+        release_name = stem
+        if lang_guess and release_name.lower().endswith('.' + lang_guess.lower()):
+            release_name = release_name[:-(len(lang_guess) + 1)]
+
+        guess = {}
+        try:
+            guess = guessit_func(release_name) or {}
+        except Exception:
+            guess = {}
+
+        content_type = str((target or {}).get('type') or '').strip().lower()
+        if content_type not in ['movie', 'tv']:
+            content_type = 'movie'
+
+        tmdb_id = str((target or {}).get('tmdb_id') or '').strip()
+        imdb_id = str((target or {}).get('imdb_id') or '').strip()
+        title = str((target or {}).get('title') or '').strip()
+        if not title:
+            title = release_name
+
+        # Basic season/episode inference
+        season = int(guess.get('season') or 0) if content_type == 'tv' else 0
+        ef = guess.get('episode')
+        if isinstance(ef, list) and len(ef) > 0:
+            ef = ef[0]
+        ee = None
+        if isinstance(guess.get('episode'), list) and len(guess.get('episode')) > 1:
+            ee = guess.get('episode')[-1]
+        try:
+            ef_i = int(ef) if ef is not None else None
+        except Exception:
+            ef_i = None
+        try:
+            ee_i = int(ee) if ee is not None else None
+        except Exception:
+            ee_i = None
+
+        # Quality inference
+        low = release_name.lower()
+        quality = 'web'
+        if 'bluray' in low or 'bdrip' in low or 'bdremux' in low:
+            quality = 'bluray'
+        elif 'dvd' in low or 'dvdrip' in low:
+            quality = 'dvd'
+        elif 'hdtv' in low:
+            quality = 'hdtv'
+        elif 'cam' in low:
+            quality = 'cam'
+
+        hi = bool(re.search(r'\b(hi|sdh)\b', low))
+
+        form = {
+            'file_n_ids': json.dumps([file_n_id]),
+            'n_id': n_id,
+            'type': content_type,
+            'quality': quality,
+            'production_type': 0,
+            'name': title,
+            'releases': json.dumps([release_name]),
+            'framerate': 0,
+            'comment': '',
+            'lang': lang,
+            'season': season,
+            'hi': str(hi).lower(),
+            'is_full_season': 'false',
+            'tags': json.dumps([])
+        }
+        if tmdb_id:
+            form['tmdb_id'] = tmdb_id
+        if imdb_id:
+            form['imdb_id'] = imdb_id
+        if content_type == 'tv':
+            if ef_i is not None:
+                form['ef'] = ef_i
+            if ee_i is not None:
+                form['ee'] = ee_i
+
+        r3 = requests.post(
+            'https://api3.subdl.com/user/uploadSubtitle',
+            headers={'token': bearer},
+            data=form,
+            timeout=60
+        )
+        r3.raise_for_status()
+        try:
+            p3 = r3.json() or {}
+        except Exception:
+            p3 = None
+
+        if isinstance(p3, dict):
+            if not p3.get('status'):
+                raise RuntimeError(p3.get('message') or 'SubDL uploadSubtitle failed')
+            return p3
+
+        text = (r3.text or '').strip()
+        if text:
+            return {'status': True, 'message': text}
+        return {'status': True, 'message': 'subtitle sent for review'}
+
     def _translate_with_google_local(self, source_path, dest_path, target_lang):
         """
         Execute translation using local GoogleTranslate implementation

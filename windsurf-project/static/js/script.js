@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const translateBtn = document.getElementById('translateBtn');
     const searchSubtitlesBtn = document.getElementById('searchSubtitlesBtn');
     const syncSubtitlesBtn = document.getElementById('syncSubtitlesBtn');
+    const publishSubtitlesBtn = document.getElementById('publishSubtitlesBtn');
     const filterVideoBtn = document.getElementById('filterVideoBtn');
     const filterSubtitleBtn = document.getElementById('filterSubtitleBtn');
     const filterAllBtn = document.getElementById('filterAllBtn');
@@ -26,6 +27,18 @@ document.addEventListener('DOMContentLoaded', function() {
     const renameConfirmBtn = document.getElementById('renameConfirmBtn');
     const renameCancelBtn = document.getElementById('renameCancelBtn');
     const renameModalClose = document.getElementById('renameModalClose');
+
+    const publishModal = document.getElementById('publishModal');
+    const publishModalClose = document.getElementById('publishModalClose');
+    const publishCancelBtn = document.getElementById('publishCancelBtn');
+    const publishConfirmBtn = document.getElementById('publishConfirmBtn');
+    const imdbSearchInput = document.getElementById('imdbSearchInput');
+    const imdbSearchResults = document.getElementById('imdbSearchResults');
+    const publishTypeSelect = document.getElementById('publishTypeSelect');
+    const publishTmdbId = document.getElementById('publishTmdbId');
+    const publishImdbId = document.getElementById('publishImdbId');
+    const publishTitle = document.getElementById('publishTitle');
+    const publishError = document.getElementById('publishError');
     let currentPath = '';
     let selectedFiles = new Set();
     let currentItems = [];
@@ -169,8 +182,14 @@ document.addEventListener('DOMContentLoaded', function() {
     function isSrt(path){ return getExt(path) === '.srt'; }
     function isSup(path){ return getExt(path) === '.sup'; }
     function isSub(path){ return getExt(path) === '.sub'; }
+    function isAss(path){ return getExt(path) === '.ass'; }
+    function isSsa(path){ return getExt(path) === '.ssa'; }
     function isIdx(path){ return getExt(path) === '.idx'; }
-    function isSubtitle(path){ return isSrt(path) || isSup(path) || isSub(path); }
+    function isSubtitle(path){ return isSrt(path) || isSup(path) || isSub(path) || isAss(path) || isSsa(path); }
+    function isPublishableSubtitle(path){
+        const ext = getExt(path);
+        return ext === '.srt' || ext === '.ass' || ext === '.ssa' || ext === '.sub';
+    }
 
     // Load app settings to get excluded file types
     async function loadSettings() {
@@ -457,6 +476,12 @@ document.addEventListener('DOMContentLoaded', function() {
             const allSrt = anySelected && arr.every(isSrt);
             syncSubtitlesBtn.disabled = !allSrt;
         }
+
+        if (publishSubtitlesBtn) {
+            const arr = Array.from(selectedFiles);
+            const allPublishable = anySelected && arr.every(isPublishableSubtitle);
+            publishSubtitlesBtn.disabled = !allPublishable;
+        }
     }
 
     // Update Select All checkbox state
@@ -613,7 +638,153 @@ document.addEventListener('DOMContentLoaded', function() {
         if (e.key === 'Escape' && renameModal.style.display === 'flex') {
             renameModal.style.display = 'none';
         }
+        if (e.key === 'Escape' && publishModal && publishModal.style.display === 'flex') {
+            publishModal.style.display = 'none';
+        }
     });
+
+    function showPublishError(msg){
+        if (!publishError) return;
+        if (!msg) {
+            publishError.style.display = 'none';
+            publishError.textContent = '';
+            return;
+        }
+        publishError.textContent = msg;
+        publishError.style.display = 'block';
+    }
+
+    function openPublishModal(){
+        if (!publishModal) return;
+        showPublishError('');
+        if (imdbSearchResults) {
+            imdbSearchResults.style.display = 'none';
+            imdbSearchResults.innerHTML = '';
+        }
+        if (imdbSearchInput) imdbSearchInput.value = '';
+        if (publishTmdbId) publishTmdbId.value = '';
+        if (publishImdbId) publishImdbId.value = '';
+        if (publishTitle) publishTitle.value = '';
+        if (publishTypeSelect) publishTypeSelect.value = 'movie';
+        publishModal.style.display = 'flex';
+        setTimeout(() => imdbSearchInput && imdbSearchInput.focus(), 0);
+    }
+
+    async function fetchImdbSuggest(q){
+        const res = await fetch(`/api/imdb_suggest?q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || 'IMDb suggest failed');
+        return data.results || [];
+    }
+
+    function renderImdbResults(results){
+        if (!imdbSearchResults) return;
+        if (!Array.isArray(results) || results.length === 0) {
+            imdbSearchResults.style.display = 'none';
+            imdbSearchResults.innerHTML = '';
+            return;
+        }
+        imdbSearchResults.innerHTML = '';
+        results.slice(0, 15).forEach(r => {
+            const row = document.createElement('div');
+            row.style.padding = '8px 10px';
+            row.style.cursor = 'pointer';
+            row.style.borderBottom = '1px solid #e1e4e8';
+            const year = r.year ? ` (${r.year})` : '';
+            const kind = r.kind ? ` - ${r.kind}` : '';
+            row.textContent = `${r.title}${year}${kind}`;
+            row.addEventListener('mouseenter', () => { row.style.background = '#f0f4f8'; });
+            row.addEventListener('mouseleave', () => { row.style.background = '#fff'; });
+            row.addEventListener('click', () => {
+                if (publishImdbId) publishImdbId.value = r.imdb_id || '';
+                if (publishTitle) publishTitle.value = r.title || '';
+                if (publishTypeSelect) {
+                    const k = (r.kind || '').toLowerCase();
+                    const isTv = k.includes('tv') || k.includes('series') || k.includes('episode');
+                    publishTypeSelect.value = isTv ? 'tv' : 'movie';
+                }
+                imdbSearchResults.style.display = 'none';
+            });
+            imdbSearchResults.appendChild(row);
+        });
+        imdbSearchResults.style.display = 'block';
+    }
+
+    let imdbSuggestTimer = null;
+    if (imdbSearchInput) {
+        imdbSearchInput.addEventListener('input', () => {
+            const q = (imdbSearchInput.value || '').trim();
+            if (imdbSuggestTimer) clearTimeout(imdbSuggestTimer);
+            if (q.length < 2) {
+                renderImdbResults([]);
+                return;
+            }
+            imdbSuggestTimer = setTimeout(async () => {
+                try {
+                    const results = await fetchImdbSuggest(q);
+                    renderImdbResults(results);
+                } catch (e) {
+                    console.error('imdb suggest error', e);
+                    renderImdbResults([]);
+                }
+            }, 250);
+        });
+    }
+
+    if (publishModalClose) {
+        publishModalClose.addEventListener('click', () => {
+            if (publishModal) publishModal.style.display = 'none';
+        });
+    }
+    if (publishCancelBtn) {
+        publishCancelBtn.addEventListener('click', () => {
+            if (publishModal) publishModal.style.display = 'none';
+        });
+    }
+
+    if (publishSubtitlesBtn) {
+        publishSubtitlesBtn.addEventListener('click', () => {
+            if (publishSubtitlesBtn.disabled) return;
+            openPublishModal();
+        });
+    }
+
+    if (publishConfirmBtn) {
+        publishConfirmBtn.addEventListener('click', async () => {
+            if (!publishModal) return;
+            const subtitles = Array.from(selectedFiles);
+            const type = (publishTypeSelect ? publishTypeSelect.value : 'movie') || 'movie';
+            const tmdbId = (publishTmdbId ? publishTmdbId.value : '').trim();
+            const imdbId = (publishImdbId ? publishImdbId.value : '').trim();
+            const title = (publishTitle ? publishTitle.value : '').trim();
+
+            if (!tmdbId && !imdbId) {
+                showPublishError('Please provide TMDB ID or IMDb ID.');
+                return;
+            }
+            showPublishError('');
+            try {
+                const res = await fetch('/api/publish_subtitles', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        paths: subtitles,
+                        target: { type, tmdb_id: tmdbId, imdb_id: imdbId, title }
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    showPublishError(data.error || 'Publish request failed.');
+                    return;
+                }
+                showToast(`${data.message || 'Jobs added to queue'}. View progress in the Job Queue page.`, 'success');
+                publishModal.style.display = 'none';
+            } catch (e) {
+                console.error('publish subtitles error', e);
+                showPublishError('Network error. Please try again.');
+            }
+        });
+    }
 
     // Handle Delete
     if (deleteBtn) {
