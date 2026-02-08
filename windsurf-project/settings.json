@@ -2,45 +2,72 @@
   "root_dir": "/media",
   "mullvad_vpn_config_dir": "",
   "excluded_file_types": "",
-  "max_parallel_jobs": 2,
+  "max_parallel_jobs": 1,
   "subtitle_max_downloads": 1,
+  "sync_dont_fix_framerate": false,
+  "sync_use_golden_section": true,
+  "sync_vad": "default",
   "provider": "DeepL",
   "translation_target_language": "th",
   "ocr_source_language": "deu",
   "extraction_source_language": "eng",
+  "gemini_model": "gemini-3-flash-preview",
+  "deepl_endpoint": "https://api-free.deepl.com/v2/translate",
   "subtitle_search_languages": [
     "en"
   ],
   "subtitle_providers": {
     "opensubtitles": {
-      "enabled": false,
+      "enabled": true,
       "username": "",
       "password": ""
     },
     "addic7ed": {
-      "enabled": false,
+      "enabled": true,
       "username": "",
       "password": ""
+    },
+    "subdl": {
+      "enabled": true,
+      "api_key": "",
+      "upload_token": ""
     }
   },
   "auto_switch_on_error": false,
   "azure_endpoint": "https://api.cognitive.microsofttranslator.com",
   "azure_region": "eastus",
   "wait_ms": {
-    "GoogleTranslate": 0,
-    "DeepL": 0,
-    "Azure": 0
+    "DeepL": 4000,
+    "Azure": 4000,
+    "Gemini": 4000
+  },
+  "max_chars_per_request": {
+    "DeepL": 1000000,
+    "Azure": 1000000,
+    "Gemini": 1000000
   },
   "retry_after_days": {
-    "DeepL": 0,
-    "Azure": 0
+    "DeepL": 32,
+    "Azure": 32,
+    "Gemini": 32
   },
   "auto_change_key_on_error": {
     "DeepL": false,
-    "Azure": false
+    "Azure": false,
+    "Gemini": false
   },
   "provider_keys": {
-    "DeepL": [],
-    "Azure": []
+    "DeepL": [
+      {
+        "value": "YOUR_API_KEY",
+        "active": true,
+        "last_usage": null,
+        "last_error": null,
+        "last_error_at": null,
+        "vpn_config": null
+      }
+    ],
+    "Azure": [],
+    "Gemini": []
   }
 }
