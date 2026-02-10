@@ -819,6 +819,17 @@ class JobQueue:
         base_dir = params.get('base_dir')
         settings_file = params.get('settings_file')
         target = params.get('target') or {}
+        comment = params.get('comment')
+        tags = params.get('tags')
+
+        if not isinstance(comment, str):
+            comment = ''
+        if isinstance(tags, str):
+            tags = [s.strip() for s in tags.split(',') if s.strip()]
+        elif isinstance(tags, list):
+            tags = [str(x).strip() for x in tags if str(x).strip()]
+        else:
+            tags = []
 
         logging.info(
             'Publish job starting for %s (target type=%s tmdb_id=%s imdb_id=%s title=%s)',
@@ -855,7 +866,7 @@ class JobQueue:
             attempted.append('subdl')
             try:
                 logging.info('Publish attempting provider=subdl for %s', file_path)
-                upload_result = self._publish_to_subdl(abs_path, target, subdl_token, guessit, Language)
+                upload_result = self._publish_to_subdl(abs_path, target, subdl_token, guessit, Language, comment=comment, tags=tags)
                 succeeded.append({'provider': 'subdl', 'result': upload_result})
                 msg = None
                 if isinstance(upload_result, dict):
@@ -891,7 +902,7 @@ class JobQueue:
             'failed': failed
         }
 
-    def _publish_to_subdl(self, subtitle_abs_path: str, target: Dict, token: str, guessit_func, LanguageCls) -> Dict:
+    def _publish_to_subdl(self, subtitle_abs_path: str, target: Dict, token: str, guessit_func, LanguageCls, comment: str = '', tags: list = None) -> Dict:
         import os
         import json
         import requests
@@ -1031,16 +1042,16 @@ class JobQueue:
             'n_id': n_id,
             'type': content_type,
             'quality': quality,
-            'production_type': 0,
+            'production_type': 3, # 3 = Machine translated
             'name': title,
             'releases': json.dumps([release_name]),
             'framerate': 0,
-            'comment': '',
+            'comment': str(comment or ''),
             'lang': lang,
             'season': season,
             'hi': str(hi).lower(),
             'is_full_season': 'false',
-            'tags': json.dumps([])
+            'tags': json.dumps([str(x).strip() for x in (tags or []) if str(x).strip()])
         }
         if tmdb_id:
             form['tmdb_id'] = tmdb_id

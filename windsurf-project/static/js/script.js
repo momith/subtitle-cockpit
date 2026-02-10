@@ -3,9 +3,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const breadcrumb = document.getElementById('breadcrumb');
     const selectAll = document.getElementById('selectAll');
     const refreshBtn = document.getElementById('refreshBtn');
+    const newFolderBtn = document.getElementById('newFolderBtn');
     const renameBtn = document.getElementById('renameBtn');
     const bulkEditBtn = document.getElementById('bulkEditBtn');
     const deleteBtn = document.getElementById('deleteBtn');
+    const deleteFolderBtn = document.getElementById('deleteFolderBtn');
     const downloadBtn = document.getElementById('downloadBtn');
     const uploadBtn = document.getElementById('uploadBtn');
     const uploadFileInput = document.getElementById('uploadFileInput');
@@ -38,6 +40,13 @@ document.addEventListener('DOMContentLoaded', function() {
     const bulkRenamePreview = document.getElementById('bulkRenamePreview');
     const bulkRenameError = document.getElementById('bulkRenameError');
 
+    const mkdirModal = document.getElementById('mkdirModal');
+    const mkdirModalClose = document.getElementById('mkdirModalClose');
+    const mkdirCancelBtn = document.getElementById('mkdirCancelBtn');
+    const mkdirConfirmBtn = document.getElementById('mkdirConfirmBtn');
+    const mkdirNameInput = document.getElementById('mkdirNameInput');
+    const mkdirError = document.getElementById('mkdirError');
+
     const publishModal = document.getElementById('publishModal');
     const publishModalClose = document.getElementById('publishModalClose');
     const publishCancelBtn = document.getElementById('publishCancelBtn');
@@ -48,6 +57,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const publishTmdbId = document.getElementById('publishTmdbId');
     const publishImdbId = document.getElementById('publishImdbId');
     const publishTitle = document.getElementById('publishTitle');
+    const publishComment = document.getElementById('publishComment');
+    const publishTags = document.getElementById('publishTags');
     const publishError = document.getElementById('publishError');
     let currentPath = '';
     let selectedFiles = new Set();
@@ -511,8 +522,22 @@ document.addEventListener('DOMContentLoaded', function() {
         if (bulkEditBtn) {
             bulkEditBtn.disabled = !multiSelected;
         }
+        if (deleteFolderBtn) {
+            if (!oneSelected) {
+                deleteFolderBtn.disabled = true;
+            } else {
+                const p = Array.from(selectedFiles)[0];
+                const it = currentItems.find(x => x.path === p);
+                deleteFolderBtn.disabled = !(it && it.is_dir);
+            }
+        }
         if (downloadBtn) {
-            downloadBtn.disabled = !oneSelected;
+            const arr = Array.from(selectedFiles);
+            const allAreFiles = anySelected && arr.every(p => {
+                const it = currentItems.find(x => x.path === p);
+                return it && !it.is_dir;
+            });
+            downloadBtn.disabled = !allAreFiles;
         }
         if (extractBtn) {
             const arr = Array.from(selectedFiles);
@@ -708,6 +733,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if (e.key === 'Escape' && bulkRenameModal && bulkRenameModal.style.display === 'flex') {
             bulkRenameModal.style.display = 'none';
         }
+        if (e.key === 'Escape' && mkdirModal && mkdirModal.style.display === 'flex') {
+            mkdirModal.style.display = 'none';
+        }
     });
 
     if (bulkEditBtn) {
@@ -810,6 +838,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (publishTmdbId) publishTmdbId.value = '';
         if (publishImdbId) publishImdbId.value = '';
         if (publishTitle) publishTitle.value = '';
+        if (publishComment) publishComment.value = '';
+        if (publishTags) publishTags.value = '';
         if (publishTypeSelect) publishTypeSelect.value = 'movie';
         publishModal.style.display = 'flex';
         setTimeout(() => imdbSearchInput && imdbSearchInput.focus(), 0);
@@ -902,6 +932,9 @@ document.addEventListener('DOMContentLoaded', function() {
             const tmdbId = (publishTmdbId ? publishTmdbId.value : '').trim();
             const imdbId = (publishImdbId ? publishImdbId.value : '').trim();
             const title = (publishTitle ? publishTitle.value : '').trim();
+            const comment = (publishComment ? publishComment.value : '').trim();
+            const tagsRaw = (publishTags ? publishTags.value : '');
+            const tags = (tagsRaw || '').split(',').map(s => s.trim()).filter(Boolean);
 
             if (!tmdbId && !imdbId) {
                 showPublishError('Please provide TMDB ID or IMDb ID.');
@@ -914,7 +947,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         paths: subtitles,
-                        target: { type, tmdb_id: tmdbId, imdb_id: imdbId, title }
+                        target: { type, tmdb_id: tmdbId, imdb_id: imdbId, title },
+                        comment,
+                        tags
                     })
                 });
                 const data = await res.json();
@@ -952,6 +987,38 @@ document.addEventListener('DOMContentLoaded', function() {
             } catch (e) {
                 console.error('Delete error', e);
                 showToast('Failed to delete some items. Check console for details.', 'error');
+            }
+        });
+    }
+
+    if (deleteFolderBtn) {
+        deleteFolderBtn.addEventListener('click', async () => {
+            if (deleteFolderBtn.disabled || selectedFiles.size !== 1) return;
+            const folderPath = Array.from(selectedFiles)[0];
+            const item = currentItems.find(x => x.path === folderPath);
+            if (!item || !item.is_dir) return;
+
+            const folderName = folderPath.split('/').filter(Boolean).pop() || folderPath;
+            const ok = confirm(`Delete folder "${folderName}" and ALL of its contents?`);
+            if (!ok) return;
+
+            try {
+                const res = await fetch('/api/delete_folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: folderPath })
+                });
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    showToast(`Delete folder failed: ${data.error || 'Unknown error'}`, 'error', 6000);
+                    return;
+                }
+                showToast(`Deleted folder: ${folderName}`, 'success', 3000);
+                selectedFiles.clear();
+                loadDirectory(currentPath || '');
+            } catch (e) {
+                console.error('Delete folder error', e);
+                showToast('Failed to delete folder. See console for details.', 'error', 6000);
             }
         });
     }
@@ -1134,18 +1201,21 @@ document.addEventListener('DOMContentLoaded', function() {
     // Download button handler
     if (downloadBtn) {
         downloadBtn.addEventListener('click', async () => {
-            if (downloadBtn.disabled || selectedFiles.size !== 1) return;
-            
-            const filePath = Array.from(selectedFiles)[0];
+            if (downloadBtn.disabled || selectedFiles.size === 0) return;
+
+            const selected = Array.from(selectedFiles);
+            const isBulk = selected.length > 1;
+            const filePath = selected[0];
             const fileName = filePath.split('/').pop();
+            const downloadName = isBulk ? 'download.zip' : fileName;
             
             try {
-                showToast(`Downloading ${fileName}...`, 'info', 3000);
-                
-                const response = await fetch('/api/download', {
+                showToast(`Downloading ${isBulk ? selected.length + ' files' : fileName}...`, 'info', 3000);
+
+                const response = await fetch(isBulk ? '/api/download_bulk' : '/api/download', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: filePath })
+                    body: JSON.stringify(isBulk ? { paths: selected } : { path: filePath })
                 });
                 
                 if (!response.ok) {
@@ -1159,17 +1229,86 @@ document.addEventListener('DOMContentLoaded', function() {
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = fileName;
+                a.download = downloadName;
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);
                 document.body.removeChild(a);
                 
-                showToast(`Downloaded ${fileName} successfully`, 'success', 3000);
+                showToast(`Downloaded ${downloadName} successfully`, 'success', 3000);
                 
             } catch (e) {
                 console.error('Download error:', e);
                 showToast(`Download failed: ${e.message}`, 'error', 5000);
+            }
+        });
+    }
+
+    function showMkdirError(msg) {
+        if (!mkdirError) return;
+        if (!msg) {
+            mkdirError.style.display = 'none';
+            mkdirError.textContent = '';
+            return;
+        }
+        mkdirError.textContent = msg;
+        mkdirError.style.display = 'block';
+    }
+
+    function openMkdirModal() {
+        if (!mkdirModal) return;
+        showMkdirError('');
+        if (mkdirNameInput) mkdirNameInput.value = '';
+        mkdirModal.style.display = 'flex';
+        setTimeout(() => mkdirNameInput && mkdirNameInput.focus(), 0);
+    }
+
+    if (newFolderBtn) {
+        newFolderBtn.addEventListener('click', () => {
+            openMkdirModal();
+        });
+    }
+
+    if (mkdirModalClose) {
+        mkdirModalClose.addEventListener('click', () => {
+            if (mkdirModal) mkdirModal.style.display = 'none';
+        });
+    }
+
+    if (mkdirCancelBtn) {
+        mkdirCancelBtn.addEventListener('click', () => {
+            if (mkdirModal) mkdirModal.style.display = 'none';
+        });
+    }
+
+    if (mkdirConfirmBtn) {
+        mkdirConfirmBtn.addEventListener('click', async () => {
+            const name = (mkdirNameInput ? mkdirNameInput.value : '').trim();
+            showMkdirError('');
+            if (!name) {
+                showMkdirError('Folder name cannot be empty.');
+                return;
+            }
+            try {
+                const res = await fetch('/api/mkdir', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        path: currentPath || '',
+                        name
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    showMkdirError(data.error || 'Failed to create folder.');
+                    return;
+                }
+                showToast(`Created folder: ${name}`, 'success', 3000);
+                if (mkdirModal) mkdirModal.style.display = 'none';
+                loadDirectory(currentPath || '');
+            } catch (e) {
+                console.error('mkdir error', e);
+                showMkdirError('Network error. Please try again.');
             }
         });
     }
@@ -1269,7 +1408,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 updateUploadProgress('', 0);
                 uploadInProgress = false;
                 uploadBtn.disabled = false;
-                uploadBtn.innerHTML = '<i class="fas fa-upload"></i> Upload Files';
+                uploadBtn.innerHTML = '<i class="fas fa-upload"></i> Upload';
                 uploadFileInput.value = '';
             }
         });

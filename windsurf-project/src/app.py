@@ -709,6 +709,103 @@ def download_file():
         logging.exception(f'Error downloading file: {e}')
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/download_bulk', methods=['POST'])
+def download_files_bulk():
+    """Download multiple files as a zip archive."""
+    from flask import send_file, after_this_request
+    import zipfile
+    import tempfile
+    try:
+        data = request.get_json(silent=True) or {}
+        paths = data.get('paths', [])
+
+        if not isinstance(paths, list) or len(paths) == 0:
+            return jsonify({'error': 'No file paths provided'}), 400
+
+        settings = read_settings()
+        base_dir = settings.get('root_dir') or app.config.get('BASE_DIR')
+        if not base_dir:
+            return jsonify({'error': 'Base directory not configured'}), 400
+
+        base_dir_norm = os.path.normpath(base_dir)
+
+        tmp = tempfile.NamedTemporaryFile(prefix='subtitle_cockpit_', suffix='.zip', delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+
+        files_added = 0
+        used_names = set()
+
+        try:
+            with zipfile.ZipFile(tmp_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                for rel in paths:
+                    if not isinstance(rel, str):
+                        continue
+                    rel_path = rel.strip()
+                    if not rel_path:
+                        continue
+
+                    target_path = os.path.normpath(os.path.join(base_dir, rel_path))
+                    if not target_path.startswith(base_dir_norm):
+                        continue
+                    if not os.path.exists(target_path) or os.path.isdir(target_path):
+                        continue
+
+                    arcname = os.path.basename(target_path)
+                    if not arcname:
+                        continue
+
+                    if arcname in used_names:
+                        base, ext = os.path.splitext(arcname)
+                        i = 2
+                        while True:
+                            alt = f'{base} ({i}){ext}'
+                            if alt not in used_names:
+                                arcname = alt
+                                break
+                            i += 1
+
+                    used_names.add(arcname)
+                    zf.write(target_path, arcname=arcname)
+                    files_added += 1
+
+            if files_added == 0:
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+                return jsonify({'error': 'No valid files to download'}), 400
+
+        except Exception:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            raise
+
+        @after_this_request
+        def _cleanup(resp):
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            return resp
+
+        return send_file(
+            tmp_path,
+            as_attachment=True,
+            download_name='download.zip',
+            mimetype='application/zip',
+            max_age=0,
+        )
+
+    except Exception as e:
+        logging.exception(f'Error bulk downloading files: {e}')
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
     """Upload a file to the file explorer"""
@@ -829,6 +926,46 @@ def upload_file():
     except Exception as e:
         logging.exception(f'Error uploading file: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mkdir', methods=['POST'])
+def make_directory():
+    """Create a new directory in the file explorer."""
+    data = request.get_json(silent=True) or {}
+    parent_rel = str(data.get('path', '') or '').strip()
+    name = str(data.get('name', '') or '').strip()
+
+    if not name:
+        return jsonify({'error': 'Folder name is required'}), 400
+    if name in ['.', '..']:
+        return jsonify({'error': 'Invalid folder name'}), 400
+    if '/' in name or '\\' in name:
+        return jsonify({'error': 'Folder name must not contain slashes'}), 400
+
+    settings = read_settings()
+    base_dir = settings.get('root_dir') or app.config.get('BASE_DIR')
+    if not base_dir:
+        return jsonify({'error': 'Base directory not configured'}), 400
+
+    base_dir_norm = os.path.normpath(base_dir)
+    full_parent = os.path.normpath(os.path.join(base_dir, parent_rel))
+    if not full_parent.startswith(base_dir_norm):
+        return jsonify({'error': 'Path outside base directory'}), 403
+    if not os.path.exists(full_parent) or not os.path.isdir(full_parent):
+        return jsonify({'error': 'Target path is not a directory'}), 400
+
+    new_dir_abs = os.path.normpath(os.path.join(full_parent, name))
+    if os.path.exists(new_dir_abs):
+        return jsonify({'error': 'Target path already exists'}), 409
+
+    try:
+        os.makedirs(new_dir_abs, exist_ok=False)
+    except Exception as e:
+        logging.exception(f'Failed to create directory {new_dir_abs}: {e}')
+        return jsonify({'error': f'Failed to create directory: {str(e)}'}), 500
+
+    new_rel = os.path.relpath(new_dir_abs, base_dir).replace('\\', '/')
+    return jsonify({'ok': True, 'path': new_rel, 'name': name})
 
 
 @app.route('/api/upload_raw', methods=['POST'])
@@ -976,6 +1113,49 @@ def delete_files():
             results.append({'path': rel_path, 'status': 'error', 'message': str(e)})
 
     return jsonify({'results': results})
+
+
+@app.route('/api/delete_folder', methods=['POST'])
+def delete_folder():
+    data = request.get_json(silent=True) or {}
+    rel_path = str(data.get('path', '') or '').strip()
+    if not rel_path:
+        return jsonify({'error': 'No folder path provided'}), 400
+
+    settings = read_settings()
+    base_dir = settings.get('root_dir') or app.config.get('BASE_DIR')
+    if not base_dir:
+        return jsonify({'error': 'Base directory not configured'}), 400
+
+    base_dir_norm = os.path.normpath(base_dir)
+    target_path = os.path.normpath(os.path.join(base_dir, rel_path))
+
+    logging.info(f'Delete folder request: base_dir={base_dir}, rel_path={rel_path}, target_path={target_path}')
+
+    if not target_path.startswith(base_dir_norm):
+        return jsonify({'error': 'Path outside base directory'}), 403
+
+    if not os.path.exists(target_path):
+        return jsonify({'error': 'Not found'}), 404
+
+    if not os.path.isdir(target_path):
+        return jsonify({'error': 'Target path is not a directory'}), 400
+
+    # Disallow deleting the configured root itself
+    try:
+        if os.path.normcase(os.path.abspath(target_path)) == os.path.normcase(os.path.abspath(base_dir_norm)):
+            return jsonify({'error': 'Refusing to delete the base directory'}), 400
+    except Exception:
+        pass
+
+    try:
+        import shutil
+        shutil.rmtree(target_path)
+    except Exception as e:
+        logging.exception(f'Failed to delete directory {target_path}: {e}')
+        return jsonify({'error': f'Failed to delete folder: {str(e)}'}), 500
+
+    return jsonify({'ok': True, 'path': rel_path})
 
 def _get_host_path(container_path):
     """Convert container path to host path for Docker volume mounts"""
@@ -1286,6 +1466,16 @@ def publish_subtitles():
     data = request.get_json(silent=True) or {}
     paths = data.get('paths', [])
     target = data.get('target', {}) or {}
+    comment = str(data.get('comment', '') or '')
+    raw_tags = data.get('tags', [])
+
+    tags: list[str]
+    if isinstance(raw_tags, list):
+        tags = [str(x).strip() for x in raw_tags if str(x).strip()]
+    elif isinstance(raw_tags, str):
+        tags = [s.strip() for s in raw_tags.split(',') if s.strip()]
+    else:
+        tags = []
 
     if not isinstance(paths, list) or len(paths) == 0:
         return jsonify({'error': 'No subtitle files provided'}), 400
@@ -1335,7 +1525,9 @@ def publish_subtitles():
                         'imdb_id': imdb_id,
                         'title': title,
                         'year': target.get('year')
-                    }
+                    },
+                    'comment': comment,
+                    'tags': tags
                 }
             )
             added_jobs.append({'path': rel_path, 'job_id': job_id})

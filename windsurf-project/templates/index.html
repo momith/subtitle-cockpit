@@ -43,6 +43,9 @@
             <button id="refreshBtn" class="btn">
                 <i class="fas fa-rotate"></i> Refresh
             </button>
+            <button id="newFolderBtn" class="btn">
+                <i class="fas fa-folder-plus"></i> New Folder
+            </button>
             <button id="renameBtn" class="btn" disabled>
                 <i class="fas fa-edit"></i> Rename/Move
             </button>
@@ -51,6 +54,9 @@
             </button>
             <button id="deleteBtn" class="btn" disabled>
                 <i class="fas fa-trash"></i> Delete
+            </button>
+            <button id="deleteFolderBtn" class="btn" disabled>
+                <i class="fas fa-folder-minus"></i> Delete Folder
             </button>
             <button id="downloadBtn" class="btn" disabled>
                 <i class="fas fa-download"></i> Download
@@ -70,7 +76,7 @@
         </div>
         <div class="toolbar" style="margin-top:6px;">
             <button id="extractBtn" class="btn" disabled>
-                <i class="fas fa-file-export"></i> Extract SUP/SUB
+                <i class="fas fa-file-export"></i> Extract SUP/SUB/SRT
             </button>
             <button id="supToSrtBtn" class="btn" disabled>
                 <i class="fas fa-exchange-alt"></i> SUP/SUB to SRT
@@ -147,6 +153,28 @@
         </div>
     </div>
 
+    <!-- New Folder Modal -->
+    <div id="mkdirModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-folder-plus"></i> New Folder</h3>
+                <button class="modal-close" id="mkdirModalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom: 12px; color: #666;">
+                    Create a new directory in the current folder.
+                </p>
+                <label for="mkdirNameInput" style="display: block; font-weight: 600; margin-bottom: 8px;">Folder name</label>
+                <input type="text" id="mkdirNameInput" style="width: 100%; padding: 8px; border: 1px solid #e1e4e8; border-radius: 6px;" placeholder="e.g. Season 03" />
+                <div id="mkdirError" style="display: none; margin-top: 8px; padding: 8px; background: #fee; border: 1px solid #fcc; border-radius: 4px; color: #c33;"></div>
+            </div>
+            <div class="modal-footer">
+                <button id="mkdirConfirmBtn" class="btn"><i class="fas fa-check"></i> Create</button>
+                <button id="mkdirCancelBtn" class="btn"><i class="fas fa-times"></i> Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Publish Subtitle Modal -->
     <div id="publishModal" class="modal" style="display: none;">
         <div class="modal-content">
@@ -186,6 +214,15 @@
                             <label for="publishTitle">Title</label>
                             <input id="publishTitle" type="text" placeholder="Title" />
                         </div>
+                    </div>
+
+                    <div>
+                        <label for="publishComment">Comment</label>
+                        <textarea id="publishComment" rows="3" style="width: 100%; padding: 8px; border: 1px solid #e1e4e8; border-radius: 6px; resize: vertical;" placeholder="Optional comment shown on the provider"></textarea>
+                    </div>
+                    <div>
+                        <label for="publishTags">Tags</label>
+                        <input id="publishTags" type="text" placeholder="Optional comma-separated tags" />
                     </div>
                     <div id="publishError" style="display:none; margin-top: 8px; padding: 8px; background: #fee; border: 1px solid #fcc; border-radius: 4px; color: #c33;"></div>
                 </div>
