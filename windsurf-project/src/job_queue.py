@@ -820,16 +820,9 @@ class JobQueue:
         settings_file = params.get('settings_file')
         target = params.get('target') or {}
         comment = params.get('comment')
-        tags = params.get('tags')
 
         if not isinstance(comment, str):
             comment = ''
-        if isinstance(tags, str):
-            tags = [s.strip() for s in tags.split(',') if s.strip()]
-        elif isinstance(tags, list):
-            tags = [str(x).strip() for x in tags if str(x).strip()]
-        else:
-            tags = []
 
         logging.info(
             'Publish job starting for %s (target type=%s tmdb_id=%s imdb_id=%s title=%s)',
@@ -855,54 +848,25 @@ class JobQueue:
         subtitle_providers = settings.get('subtitle_providers', {})
         subdl_config = subtitle_providers.get('subdl', {}) or {}
 
-        attempted = []
-        succeeded = []
-        failed = []
-
-        # Only SubDL upload is implemented right now
         subdl_enabled = bool(subdl_config.get('enabled'))
         subdl_token = str(subdl_config.get('upload_token') or '').strip()
-        if subdl_enabled and subdl_token:
-            attempted.append('subdl')
-            try:
-                logging.info('Publish attempting provider=subdl for %s', file_path)
-                upload_result = self._publish_to_subdl(abs_path, target, subdl_token, guessit, Language, comment=comment, tags=tags)
-                succeeded.append({'provider': 'subdl', 'result': upload_result})
-                msg = None
-                if isinstance(upload_result, dict):
-                    msg = upload_result.get('message') or upload_result.get('msg')
-                logging.info('Publish succeeded provider=subdl for %s%s', file_path, (f" (message={msg})" if msg else ''))
-            except Exception as e:
-                logging.exception(f'SubDL publish failed for {file_path}: {e}')
-                failed.append({'provider': 'subdl', 'error': str(e)})
-        else:
-            logging.info('SubDL publish skipped (not enabled or missing upload token)')
+        if not subdl_enabled or not subdl_token:
+            raise RuntimeError('SubDL publishing is not enabled or upload token is missing.')
 
-        if not attempted:
-            raise RuntimeError('No enabled subtitle providers support publishing, or required credentials are missing.')
-
-        if len(succeeded) == 0:
-            msg = 'Publishing failed for all providers'
-            if failed:
-                msg += ': ' + '; '.join([f"{x.get('provider')}: {x.get('error')}" for x in failed])
-            raise RuntimeError(msg)
-
-        logging.info(
-            'Publish job finished for %s (attempted=%s succeeded=%s failed=%s)',
-            file_path,
-            ','.join(attempted),
-            ','.join([x.get('provider') for x in succeeded]),
-            ','.join([x.get('provider') for x in failed])
-        )
+        logging.info('Publish attempting provider=subdl for %s', file_path)
+        upload_result = self._publish_to_subdl(abs_path, target, subdl_token, guessit, Language, comment=comment)
+        msg = None
+        if isinstance(upload_result, dict):
+            msg = upload_result.get('message') or upload_result.get('msg')
+        logging.info('Publish succeeded provider=subdl for %s%s', file_path, (f" (message={msg})" if msg else ''))
 
         return {
             'path': file_path,
-            'attempted': attempted,
-            'succeeded': succeeded,
-            'failed': failed
+            'provider': 'subdl',
+            'result': upload_result
         }
 
-    def _publish_to_subdl(self, subtitle_abs_path: str, target: Dict, token: str, guessit_func, LanguageCls, comment: str = '', tags: list = None) -> Dict:
+    def _publish_to_subdl(self, subtitle_abs_path: str, target: Dict, token: str, guessit_func, LanguageCls, comment: str = '') -> Dict:
         import os
         import json
         import requests
@@ -1051,7 +1015,7 @@ class JobQueue:
             'season': season,
             'hi': str(hi).lower(),
             'is_full_season': 'false',
-            'tags': json.dumps([str(x).strip() for x in (tags or []) if str(x).strip()])
+            'tags': json.dumps([])
         }
         if tmdb_id:
             form['tmdb_id'] = tmdb_id

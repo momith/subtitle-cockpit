@@ -58,7 +58,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const publishImdbId = document.getElementById('publishImdbId');
     const publishTitle = document.getElementById('publishTitle');
     const publishComment = document.getElementById('publishComment');
-    const publishTags = document.getElementById('publishTags');
     const publishError = document.getElementById('publishError');
     let currentPath = '';
     let selectedFiles = new Set();
@@ -839,7 +838,6 @@ document.addEventListener('DOMContentLoaded', function() {
         if (publishImdbId) publishImdbId.value = '';
         if (publishTitle) publishTitle.value = '';
         if (publishComment) publishComment.value = '';
-        if (publishTags) publishTags.value = '';
         if (publishTypeSelect) publishTypeSelect.value = 'movie';
         publishModal.style.display = 'flex';
         setTimeout(() => imdbSearchInput && imdbSearchInput.focus(), 0);
@@ -933,8 +931,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const imdbId = (publishImdbId ? publishImdbId.value : '').trim();
             const title = (publishTitle ? publishTitle.value : '').trim();
             const comment = (publishComment ? publishComment.value : '').trim();
-            const tagsRaw = (publishTags ? publishTags.value : '');
-            const tags = (tagsRaw || '').split(',').map(s => s.trim()).filter(Boolean);
 
             if (!tmdbId && !imdbId) {
                 showPublishError('Please provide TMDB ID or IMDb ID.');
@@ -948,8 +944,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     body: JSON.stringify({
                         paths: subtitles,
                         target: { type, tmdb_id: tmdbId, imdb_id: imdbId, title },
-                        comment,
-                        tags
+                        comment
                     })
                 });
                 const data = await res.json();

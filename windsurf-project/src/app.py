@@ -1467,15 +1467,6 @@ def publish_subtitles():
     paths = data.get('paths', [])
     target = data.get('target', {}) or {}
     comment = str(data.get('comment', '') or '')
-    raw_tags = data.get('tags', [])
-
-    tags: list[str]
-    if isinstance(raw_tags, list):
-        tags = [str(x).strip() for x in raw_tags if str(x).strip()]
-    elif isinstance(raw_tags, str):
-        tags = [s.strip() for s in raw_tags.split(',') if s.strip()]
-    else:
-        tags = []
 
     if not isinstance(paths, list) or len(paths) == 0:
         return jsonify({'error': 'No subtitle files provided'}), 400
@@ -1526,8 +1517,7 @@ def publish_subtitles():
                         'title': title,
                         'year': target.get('year')
                     },
-                    'comment': comment,
-                    'tags': tags
+                    'comment': comment
                 }
             )
             added_jobs.append({'path': rel_path, 'job_id': job_id})
