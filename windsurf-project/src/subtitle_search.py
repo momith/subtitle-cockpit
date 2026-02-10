@@ -207,7 +207,6 @@ class SubtitleSearcher:
             'languages': subdl_langs,
             'subs_per_page': 30,
             'releases': 1,
-            'hi': 1,
         }
 
         sub_type = self._subdl_guess_type(video)
@@ -231,14 +230,30 @@ class SubtitleSearcher:
             except Exception:
                 pass
 
+        logger.info(
+            'SubDL search (type=%s languages=%s file_name=%s film_name=%s season=%s episode=%s)',
+            q.get('type'),
+            q.get('languages'),
+            q.get('file_name'),
+            q.get('film_name'),
+            q.get('season_number'),
+            q.get('episode_number')
+        )
+
         url = 'https://api.subdl.com/api/v1/subtitles'
         r = requests.get(url, params=q, headers={'Accept': 'application/json'}, timeout=30)
         r.raise_for_status()
         payload = r.json()
         if not payload or not payload.get('status'):
+            msg = None
+            if isinstance(payload, dict):
+                msg = payload.get('message') or payload.get('error')
+            if msg:
+                logger.info('SubDL search returned status=false (message=%s)', msg)
             return []
 
         subs = payload.get('subtitles') or []
+        logger.info('SubDL search returned %s subtitle(s)', len(subs))
 
         def _norm(s: str) -> str:
             return re.sub(r'[^a-z0-9]+', '', (s or '').lower())

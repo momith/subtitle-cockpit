@@ -588,7 +588,16 @@ class JobQueue:
         with open(settings_file, 'r', encoding='utf-8') as f:
             settings = json.load(f)
 
-        search_languages = settings.get('subtitle_search_languages', ['en'])
+        raw_search_languages = settings.get('subtitle_search_languages', ['en'])
+        if isinstance(raw_search_languages, str):
+            search_languages = [s.strip() for s in raw_search_languages.split(',') if s.strip()]
+        elif isinstance(raw_search_languages, list):
+            search_languages = [str(x).strip() for x in raw_search_languages if str(x).strip()]
+        else:
+            search_languages = ['en']
+        if not search_languages:
+            search_languages = ['en']
+
         subtitle_max_downloads = int(settings.get('subtitle_max_downloads', 1) or 1)
         if subtitle_max_downloads < 1:
             subtitle_max_downloads = 1
@@ -618,26 +627,64 @@ class JobQueue:
             subdl_api_key=subdl_config.get('api_key') if 'subdl' in enabled_providers else None
         )
 
-        logging.info(f'Searching subtitles (job) for: {abs_path}')
-
-        subtitles = searcher.search_subtitles(
+        logging.info(
+            'Searching subtitles (job) for: %s (providers=%s languages=%s max_downloads=%s)',
             abs_path,
-            search_languages,
-            providers=enabled_providers
+            ','.join(enabled_providers),
+            ','.join(search_languages),
+            subtitle_max_downloads
         )
 
+        # Language fallback semantics: try first language, then second, etc.
+        all_subtitles = []
         downloaded_files = []
-        for sub_dict in subtitles[:subtitle_max_downloads]:
-            try:
-                out_path = searcher.download_subtitle(sub_dict, abs_path, output_dir=os.path.dirname(abs_path))
-                if out_path:
-                    downloaded_files.append(out_path)
-            except Exception as e:
-                logging.exception(f'Error downloading subtitle in job for {file_path}: {e}')
+        attempts = []
+        used_language = None
+
+        for lang in search_languages:
+            logging.info('Subtitle search attempt language=%s for %s', lang, file_path)
+            subtitles = searcher.search_subtitles(
+                abs_path,
+                [lang],
+                providers=enabled_providers
+            )
+            all_subtitles.extend(subtitles)
+
+            attempt_downloaded = []
+            for sub_dict in subtitles[:subtitle_max_downloads]:
+                try:
+                    out_path = searcher.download_subtitle(sub_dict, abs_path, output_dir=os.path.dirname(abs_path))
+                    if out_path:
+                        attempt_downloaded.append(out_path)
+                except Exception as e:
+                    logging.exception(f'Error downloading subtitle in job for {file_path}: {e}')
+
+            attempts.append({
+                'language': lang,
+                'results': len(subtitles),
+                'downloaded': len(attempt_downloaded)
+            })
+
+            if attempt_downloaded:
+                used_language = lang
+                downloaded_files.extend(attempt_downloaded)
+                logging.info('Subtitle search succeeded for %s with language=%s (downloaded=%s)', file_path, lang, len(attempt_downloaded))
+                break
+            logging.info('Subtitle search had no downloads for %s with language=%s (results=%s)', file_path, lang, len(subtitles))
+
+        if not downloaded_files:
+            raise RuntimeError(
+                'No subtitles downloaded. Providers attempted: '
+                + ','.join(enabled_providers)
+                + '. Languages attempted: '
+                + ','.join([a.get('language') for a in attempts])
+                + '. Results by language: '
+                + ', '.join([f"{a.get('language')}={a.get('results')}" for a in attempts])
+            )
 
         # Build serializable subtitle list (without subtitle_object)
         subtitle_list = []
-        for sub in subtitles:
+        for sub in all_subtitles:
             sub_copy = {k: v for k, v in sub.items() if k != 'subtitle_object'}
             subtitle_list.append(sub_copy)
 
@@ -645,6 +692,8 @@ class JobQueue:
             'path': file_path,
             'count': len(subtitle_list),
             'downloaded_files': downloaded_files,
+            'used_language': used_language,
+            'attempts': attempts,
             'subtitles': subtitle_list
         }
 
