@@ -192,6 +192,7 @@ class SubtitleSearcher:
         import requests
         from difflib import SequenceMatcher
         import re
+        from urllib.parse import urlencode
 
         if not self.subdl_api_key:
             return []
@@ -241,7 +242,17 @@ class SubtitleSearcher:
         )
 
         url = 'https://api.subdl.com/api/v1/subtitles'
+
+        safe_q = dict(q)
+        if 'api_key' in safe_q:
+            safe_q['api_key'] = '***'
+        try:
+            logger.info('SubDL REST call: GET %s?%s', url, urlencode(safe_q, doseq=True))
+        except Exception:
+            logger.info('SubDL REST call: GET %s (params could not be serialized)', url)
+
         r = requests.get(url, params=q, headers={'Accept': 'application/json'}, timeout=30)
+        logger.info('SubDL REST response: status_code=%s content_length=%s', r.status_code, r.headers.get('Content-Length'))
         r.raise_for_status()
         payload = r.json()
         if not payload or not payload.get('status'):
