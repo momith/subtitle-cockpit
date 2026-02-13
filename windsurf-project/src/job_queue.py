@@ -791,10 +791,22 @@ class JobQueue:
         logging.info('Running ffsubsync: %s', ' '.join(cmd))
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
-            stderr = (proc.stderr or '').strip().replace('\n', ' ')[:1200]
-            stdout = (proc.stdout or '').strip().replace('\n', ' ')[:1200]
-            details = stderr or stdout or 'ffsubsync failed'
-            raise RuntimeError(details)
+            stderr = (proc.stderr or '').strip()
+            stdout = (proc.stdout or '').strip()
+
+            def _tail(s: str, max_lines: int = 40, max_chars: int = 4000) -> str:
+                if not s:
+                    return ''
+                lines = s.splitlines()
+                tail = '\n'.join(lines[-max_lines:])
+                if len(tail) > max_chars:
+                    tail = tail[-max_chars:]
+                return tail
+
+            stderr_tail = _tail(stderr)
+            stdout_tail = _tail(stdout)
+            details = stderr_tail or stdout_tail or 'ffsubsync failed'
+            raise RuntimeError(f'ffsubsync failed (exit_code={proc.returncode})\n{details}')
 
         out_rel = os.path.relpath(out_abs, base_dir).replace('\\', '/')
         video_rel = os.path.relpath(video_abs, base_dir).replace('\\', '/')
