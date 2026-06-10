@@ -72,6 +72,54 @@ def start_observer(path):
         OBSERVED_PATH = path
     return OBSERVER
 
+
+def _path_within_base(base_dir: str, candidate_path: str) -> bool:
+    base_abs = os.path.abspath(os.path.normpath(base_dir))
+    candidate_abs = os.path.abspath(os.path.normpath(candidate_path))
+    try:
+        return os.path.commonpath([base_abs, candidate_abs]) == base_abs
+    except Exception:
+        return False
+
+
+def _resolve_relative_path(base_dir: str, rel_path: str) -> str:
+    safe_rel = str(rel_path or '').replace('\\', '/').lstrip('/')
+    abs_path = os.path.abspath(os.path.normpath(os.path.join(base_dir, safe_rel)))
+    if not _path_within_base(base_dir, abs_path):
+        raise ValueError('Path outside base directory')
+    return abs_path
+
+
+def _calculate_directory_size(path: str) -> int:
+    total = 0
+    stack = [path]
+
+    while stack:
+        current = stack.pop()
+        try:
+            if os.path.islink(current):
+                continue
+            if os.path.isfile(current):
+                total += os.path.getsize(current)
+                continue
+            if not os.path.isdir(current):
+                continue
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except Exception:
+                        continue
+        except Exception:
+            continue
+
+    return total
+
 def init_job_queue():
     """Initialize job queue with settings from config"""
     global job_queue
@@ -128,10 +176,12 @@ def list_files():
     settings = read_settings()
     base_dir = settings.get('root_dir') or app.config.get('BASE_DIR') or os.path.expanduser('~')
     path = request.args.get('path', '')
-    full_path = os.path.join(base_dir, path)
+    full_path = os.path.abspath(os.path.normpath(os.path.join(base_dir, path)))
     
     if not os.path.exists(full_path):
         return jsonify({'error': 'Path does not exist'}), 404
+    if not _path_within_base(base_dir, full_path):
+        return jsonify({'error': 'Path outside base directory'}), 403
     
     items = []
     try:
@@ -142,7 +192,7 @@ def list_files():
                 'name': item,
                 'is_dir': is_dir,
                 'path': os.path.join(path, item).replace('\\', '/'),
-                'size': os.path.getsize(item_path) if not is_dir else 0
+                'size': os.path.getsize(item_path) if not is_dir else None
             })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -151,6 +201,39 @@ def list_files():
         'path': path,
         'parent': os.path.dirname(path).replace('\\', '/'),
         'items': sorted(items, key=lambda x: (not x['is_dir'], x['name'].lower()))
+    })
+
+
+@app.route('/api/folder_sizes')
+def folder_sizes():
+    settings = read_settings()
+    base_dir = settings.get('root_dir') or app.config.get('BASE_DIR') or os.path.expanduser('~')
+    path = request.args.get('path', '')
+    full_path = os.path.abspath(os.path.normpath(os.path.join(base_dir, path)))
+
+    if not os.path.exists(full_path):
+        return jsonify({'error': 'Path does not exist'}), 404
+    if not _path_within_base(base_dir, full_path):
+        return jsonify({'error': 'Path outside base directory'}), 403
+    if not os.path.isdir(full_path):
+        return jsonify({'error': 'Target path is not a directory'}), 400
+
+    items = []
+    try:
+        for item in os.listdir(full_path):
+            item_path = os.path.join(full_path, item)
+            if not os.path.isdir(item_path):
+                continue
+            items.append({
+                'path': os.path.join(path, item).replace('\\', '/'),
+                'size': _calculate_directory_size(item_path)
+            })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    return jsonify({
+        'path': path,
+        'items': items
     })
 
 def _default_settings():
@@ -1259,6 +1342,102 @@ def delete_folder():
         return jsonify({'error': f'Failed to delete folder: {str(e)}'}), 500
 
     return jsonify({'ok': True, 'path': rel_path})
+
+
+@app.route('/api/paste', methods=['POST'])
+def paste_items():
+    data = request.get_json(silent=True) or {}
+    paths = data.get('paths', [])
+    target_dir = str(data.get('target_dir', '') or '').strip()
+
+    if not isinstance(paths, list) or len(paths) == 0:
+        return jsonify({'error': 'No source paths provided'}), 400
+
+    settings = read_settings()
+    base_dir = settings.get('root_dir') or app.config.get('BASE_DIR')
+    if not base_dir:
+        return jsonify({'error': 'Base directory not configured'}), 400
+
+    import shutil
+
+    try:
+        target_abs = _resolve_relative_path(base_dir, target_dir)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 403
+
+    if not os.path.exists(target_abs):
+        return jsonify({'error': 'Target directory does not exist'}), 404
+    if not os.path.isdir(target_abs):
+        return jsonify({'error': 'Target path is not a directory'}), 400
+
+    base_abs = os.path.abspath(os.path.normpath(base_dir))
+    operations = []
+    for rel_path in paths:
+        if not isinstance(rel_path, str) or not rel_path.strip():
+            return jsonify({'error': 'Invalid source path'}), 400
+
+        try:
+            src_abs = _resolve_relative_path(base_dir, rel_path)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 403
+
+        if not os.path.exists(src_abs):
+            return jsonify({'error': f'Source not found: {rel_path}'}), 404
+
+        item_name = os.path.basename(src_abs)
+        dest_abs = os.path.join(target_abs, item_name)
+        if os.path.exists(dest_abs):
+            return jsonify({'error': f'Target already exists: {item_name}'}), 409
+
+        if os.path.isdir(src_abs):
+            try:
+                if os.path.commonpath([os.path.abspath(src_abs), os.path.abspath(dest_abs)]) == os.path.abspath(src_abs):
+                    return jsonify({'error': 'Cannot paste a folder into itself or one of its subfolders'}), 400
+            except Exception:
+                pass
+
+        operations.append({
+            'src_abs': src_abs,
+            'dest_abs': dest_abs,
+            'is_dir': os.path.isdir(src_abs),
+            'rel_path': rel_path
+        })
+
+    created_paths = []
+    try:
+        for op in operations:
+            if op['is_dir']:
+                shutil.copytree(op['src_abs'], op['dest_abs'], copy_function=shutil.copy2)
+            else:
+                shutil.copy2(op['src_abs'], op['dest_abs'])
+            created_paths.append(op['dest_abs'])
+    except Exception as e:
+        logging.exception(f'Paste failed, rolling back: {e}')
+        for created in reversed(created_paths):
+            try:
+                if os.path.isdir(created):
+                    shutil.rmtree(created)
+                elif os.path.exists(created):
+                    os.remove(created)
+            except Exception:
+                pass
+        return jsonify({'error': f'Paste failed: {str(e)}'}), 500
+
+    results = []
+    for op in operations:
+        new_rel = os.path.relpath(op['dest_abs'], base_abs).replace('\\', '/')
+        results.append({
+            'path': op['rel_path'],
+            'new_path': new_rel,
+            'is_directory': op['is_dir']
+        })
+
+    return jsonify({
+        'ok': True,
+        'message': f'Pasted {len(results)} item(s)',
+        'results': results,
+        'target_dir': target_dir
+    })
 
 def _get_host_path(container_path):
     """Convert container path to host path for Docker volume mounts"""

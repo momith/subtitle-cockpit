@@ -5,6 +5,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const refreshBtn = document.getElementById('refreshBtn');
     const newFolderBtn = document.getElementById('newFolderBtn');
     const renameBtn = document.getElementById('renameBtn');
+    const copyBtn = document.getElementById('copyBtn');
+    const pasteBtn = document.getElementById('pasteBtn');
     const bulkEditBtn = document.getElementById('bulkEditBtn');
     const deleteBtn = document.getElementById('deleteBtn');
     const deleteFolderBtn = document.getElementById('deleteFolderBtn');
@@ -66,6 +68,45 @@ document.addEventListener('DOMContentLoaded', function() {
     let excludedFileTypes = new Set();
     let appSettings = {};
     let uploadInProgress = false;
+    let clipboardPaths = [];
+
+    function applyDirectoryPayload(data) {
+        currentPath = data.path;
+        cacheCurrentDirectory(currentPath);
+        selectedFiles.clear();
+        updateBreadcrumb(currentPath);
+        currentItems = data.items || [];
+        const filteredItems = filterItems(currentItems);
+        renderFileList(filteredItems, data.parent);
+        updateActionButton();
+        updateSelectAllState();
+        loadFolderSizes(currentPath);
+    }
+
+    function loadFolderSizes(path = '') {
+        const requestedPath = path || '';
+        fetch(`/api/folder_sizes?path=${encodeURIComponent(requestedPath)}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error || currentPath !== requestedPath) {
+                    return;
+                }
+
+                (data.items || []).forEach(folder => {
+                    const currentItem = currentItems.find(item => item.path === folder.path);
+                    if (currentItem) {
+                        currentItem.size = folder.size;
+                    }
+
+                    const fileItem = document.querySelector(`.file-item[data-path="${folder.path}"]`);
+                    const sizeElement = fileItem ? fileItem.querySelector('.file-size') : null;
+                    if (sizeElement) {
+                        sizeElement.textContent = formatFileSize(folder.size || 0);
+                    }
+                });
+            })
+            .catch(error => console.error('Error loading folder sizes:', error));
+    }
 
     // Toast notification system
     function showToast(message, type = 'info', duration = 5000) {
@@ -334,18 +375,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     console.error('Error:', data.error);
                     return;
                 }
-                
-                currentPath = data.path;
-                // Cache the current directory
-                cacheCurrentDirectory(currentPath);
-                // Clear selection when changing directories
-                selectedFiles.clear();
-                updateBreadcrumb(currentPath);
-                currentItems = data.items || [];
-                const filteredItems = filterItems(currentItems);
-                renderFileList(filteredItems, data.parent);
-                updateActionButton();
-                updateSelectAllState();
+
+                applyDirectoryPayload(data);
             })
             .catch(error => console.error('Error loading directory:', error));
     }
@@ -363,16 +394,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         // Cached directory not found, load home
                         loadDirectory('');
                     } else {
-                        // Successfully loaded cached directory
-                        currentPath = data.path;
-                        cacheCurrentDirectory(currentPath);
-                        selectedFiles.clear();
-                        updateBreadcrumb(currentPath);
-                        currentItems = data.items || [];
-                        const filteredItems = filterItems(currentItems);
-                        renderFileList(filteredItems, data.parent);
-                        updateActionButton();
-                        updateSelectAllState();
+                        applyDirectoryPayload(data);
                     }
                 })
                 .catch(error => {
@@ -423,7 +445,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 icon = 'fa-closed-captioning';
             }
             
-            const size = item.is_dir ? '' : formatFileSize(item.size);
+            const size = typeof item.size === 'number' ? formatFileSize(item.size) : '';
             
             fileItem.innerHTML = `
                 <div class="checkbox-container">
@@ -529,6 +551,12 @@ document.addEventListener('DOMContentLoaded', function() {
         const anySelected = selectedFiles.size > 0;
         const oneSelected = selectedFiles.size === 1;
         const multiSelected = selectedFiles.size > 1;
+        if (copyBtn) {
+            copyBtn.disabled = !anySelected;
+        }
+        if (pasteBtn) {
+            pasteBtn.disabled = clipboardPaths.length === 0;
+        }
         deleteBtn.disabled = !anySelected;
         if (renameBtn) {
             renameBtn.disabled = !oneSelected;
@@ -662,6 +690,41 @@ document.addEventListener('DOMContentLoaded', function() {
             renameModal.style.display = 'flex';
             renameInput.focus();
             renameInput.select();
+        });
+    }
+
+    if (copyBtn) {
+        copyBtn.addEventListener('click', () => {
+            if (copyBtn.disabled || selectedFiles.size === 0) return;
+            clipboardPaths = Array.from(selectedFiles);
+            updateActionButton();
+            showToast(`Copied ${clipboardPaths.length} item(s).`, 'success', 2500);
+        });
+    }
+
+    if (pasteBtn) {
+        pasteBtn.addEventListener('click', async () => {
+            if (pasteBtn.disabled || clipboardPaths.length === 0) return;
+            try {
+                const res = await fetch('/api/paste', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        paths: clipboardPaths,
+                        target_dir: currentPath || ''
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    showToast(`Paste failed: ${data.error || 'Unknown error'}`, 'error', 7000);
+                    return;
+                }
+                showToast(data.message || `Pasted ${clipboardPaths.length} item(s).`, 'success');
+                loadDirectory(currentPath || '');
+            } catch (e) {
+                console.error('Paste error', e);
+                showToast('Paste failed. See console for details.', 'error');
+            }
         });
     }
 
