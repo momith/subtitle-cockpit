@@ -38,6 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const subdlConfig = document.getElementById('subdlConfig');
   const subdlApiKey = document.getElementById('subdlApiKey');
   const subdlUploadToken = document.getElementById('subdlUploadToken');
+  const syncSampleMinutesInput = document.getElementById('syncSampleMinutesInput');
   const syncDontFixFramerate = document.getElementById('syncDontFixFramerate');
   const syncUseGoldenSection = document.getElementById('syncUseGoldenSection');
   const syncVadSelect = document.getElementById('syncVadSelect');
@@ -136,6 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (maxCharsPerRequestInput) {
       maxCharsPerRequestInput.value = Number((currentSettings.max_chars_per_request && currentSettings.max_chars_per_request[curProv]) || 0);
     }
+    if (syncSampleMinutesInput) syncSampleMinutesInput.value = Number(currentSettings.sync_sample_minutes || 3);
     if (syncDontFixFramerate) syncDontFixFramerate.checked = !!currentSettings.sync_dont_fix_framerate;
     if (syncUseGoldenSection) syncUseGoldenSection.checked = !!currentSettings.sync_use_golden_section;
     if (syncVadSelect) syncVadSelect.value = currentSettings.sync_vad || 'default';
@@ -469,6 +471,7 @@ document.addEventListener('DOMContentLoaded', () => {
         Azure: editedKeys.Azure.map(copyKeyObj),
         Gemini: editedKeys.Gemini.map(copyKeyObj)
       },
+      sync_sample_minutes: Number(syncSampleMinutesInput ? (syncSampleMinutesInput.value || 3) : 3),
       sync_dont_fix_framerate: !!(syncDontFixFramerate && syncDontFixFramerate.checked),
       sync_use_golden_section: !!(syncUseGoldenSection && syncUseGoldenSection.checked),
       sync_vad: (syncVadSelect ? (syncVadSelect.value || 'default') : 'default')
@@ -513,6 +516,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (geminiModelInput) {
           geminiModelInput.value = currentSettings.gemini_model || 'gemini-2.0-flash';
         }
+        if (syncSampleMinutesInput) syncSampleMinutesInput.value = Number(currentSettings.sync_sample_minutes || 3);
         if (syncDontFixFramerate) syncDontFixFramerate.checked = !!currentSettings.sync_dont_fix_framerate;
         if (syncUseGoldenSection) syncUseGoldenSection.checked = !!currentSettings.sync_use_golden_section;
         if (syncVadSelect) syncVadSelect.value = currentSettings.sync_vad || 'default';

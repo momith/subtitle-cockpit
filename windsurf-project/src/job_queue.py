@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Callable
 import subprocess
 import os
+from subtitle_sync import SubtitleSyncError, sync_subtitle_file
 
 # Job status constants
 STATUS_PENDING = 'pending'
@@ -302,6 +303,7 @@ class JobQueue:
         job_type = job['job_type']
         file_path = job['file_path']
         params = json.loads(job['params']) if job['params'] else {}
+        logging.info(f'Job {job_id} starting execution type={job_type} file={file_path}')
         
         try:
             if job_type == JOB_TYPE_EXTRACT:
@@ -318,8 +320,11 @@ class JobQueue:
                 result = self._execute_publish_subtitles(file_path, params)
             else:
                 raise ValueError(f'Unknown job type: {job_type}')
-            
-            self.update_job_status(job_id, STATUS_COMPLETED, result=json.dumps(result))
+
+            logging.info(f'Job {job_id} execution finished type={job_type}; serializing result')
+            serialized_result = json.dumps(result)
+            logging.info(f'Job {job_id} serialized result length={len(serialized_result)}; updating status')
+            self.update_job_status(job_id, STATUS_COMPLETED, result=serialized_result)
             logging.info(f'Job {job_id} completed successfully')
             
         except Exception as e:
@@ -698,128 +703,92 @@ class JobQueue:
         }
 
     def _execute_sync_subtitles(self, file_path: str, params: Dict) -> Dict:
-        """Execute subtitle sync job using ffsubsync.
-
-        Expects file_path to be the relative path of an .srt file. The corresponding
-        video file is auto-detected in the same directory.
-        """
+        """Execute subtitle sync job using the local faster-whisper based sync pipeline."""
         import json
-        import re
-        from difflib import SequenceMatcher
-        import shutil
 
         base_dir = params.get('base_dir')
         settings_file = params.get('settings_file')
+        subtitle_rel = params.get('subtitle_path') or file_path
+        video_rel = params.get('video_path')
 
         if not base_dir or not settings_file:
             raise ValueError('Missing required parameters: base_dir, settings_file')
+        if not subtitle_rel or not video_rel:
+            raise ValueError('Missing required parameters: subtitle_path, video_path')
 
-        sub_abs = os.path.join(base_dir, file_path)
+        sub_abs = os.path.join(base_dir, subtitle_rel)
+        video_abs = os.path.join(base_dir, video_rel)
         if not os.path.isfile(sub_abs):
             raise FileNotFoundError(f'Subtitle file not found: {sub_abs}')
+        if not os.path.isfile(video_abs):
+            raise FileNotFoundError(f'Video file not found: {video_abs}')
         if not sub_abs.lower().endswith('.srt'):
             raise RuntimeError('Only SRT subtitle files are supported for syncing')
+        if os.path.splitext(video_abs)[1].lower() not in {
+            '.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
+            '.mpeg', '.mpg', '.ts', '.m2ts'
+        }:
+            raise RuntimeError('Selected video file has an unsupported extension')
 
         if not os.path.exists(settings_file):
             raise FileNotFoundError(f'Settings file not found: {settings_file}')
         with open(settings_file, 'r', encoding='utf-8') as f:
             settings = json.load(f)
 
-        dont_fix_framerate = bool(settings.get('sync_dont_fix_framerate', False))
-        use_gss = bool(settings.get('sync_use_golden_section', False))
-        vad = str(settings.get('sync_vad', 'default') or 'default').strip()
+        sample_minutes = int(settings.get('sync_sample_minutes', 3) or 3)
+        if sample_minutes < 1:
+            sample_minutes = 1
 
-        video_exts = {
-            '.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
-            '.mpeg', '.mpg', '.ts', '.m2ts'
-        }
+        logging.info(
+            'Job sync_subtitles starting subtitle=%s video=%s sample_minutes=%s settings_file=%s',
+            sub_abs,
+            video_abs,
+            sample_minutes,
+            settings_file,
+        )
 
-        sub_dir = os.path.dirname(sub_abs)
-        sub_stem = os.path.splitext(os.path.basename(sub_abs))[0]
+        try:
+            sync_result = sync_subtitle_file(
+                video_path=video_abs,
+                subtitle_path=sub_abs,
+                sample_minutes=sample_minutes,
+            )
+        except SubtitleSyncError as exc:
+            raise RuntimeError(str(exc)) from exc
 
-        def _norm(s: str) -> str:
-            return re.sub(r'[^a-z0-9]+', '', (s or '').lower())
-
-        stem_candidates = [sub_stem]
-        parts = sub_stem.split('.')
-        if len(parts) >= 2:
-            stem_candidates.append('.'.join(parts[:-1]))
-        if len(parts) >= 3:
-            stem_candidates.append('.'.join(parts[:-2]))
-        stem_candidates = list(dict.fromkeys([c for c in stem_candidates if c]))
-
-        best = None
-        best_score = -1.0
-        for fname in os.listdir(sub_dir or '.'):  # same folder as subtitle
-            ext = os.path.splitext(fname)[1].lower()
-            if ext not in video_exts:
-                continue
-            vstem = os.path.splitext(fname)[0]
-            score = 0.0
-            for cand in stem_candidates:
-                score = max(score, SequenceMatcher(None, _norm(cand), _norm(vstem)).ratio())
-            if score > best_score:
-                best_score = score
-                best = fname
-
-        if not best or best_score < 0.60:
-            raise RuntimeError(f'No matching video file found for subtitle: {os.path.basename(sub_abs)}')
-
-        video_abs = os.path.join(sub_dir, best)
-        if not os.path.isfile(video_abs):
-            raise RuntimeError(f'Auto-detected video file does not exist: {video_abs}')
-
-        out_base = os.path.splitext(sub_abs)[0] + '.synced'
-        out_abs = out_base + '.srt'
-        if os.path.exists(out_abs):
-            counter = 2
-            while os.path.exists(f"{out_base}-{counter}.srt"):
-                counter += 1
-            out_abs = f"{out_base}-{counter}.srt"
-
-        if not shutil.which('ffsubsync'):
-            raise RuntimeError('ffsubsync is not installed or not found in PATH')
-
-        cmd = ['ffsubsync', video_abs, '-i', sub_abs, '-o', out_abs]
-        if dont_fix_framerate:
-            cmd.append('--no-fix-framerate')
-        if use_gss:
-            cmd.append('--gss')
-        if vad and vad != 'default':
-            cmd.extend(['--vad', vad])
-
-        logging.info('Running ffsubsync: %s', ' '.join(cmd))
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode != 0:
-            stderr = (proc.stderr or '').strip()
-            stdout = (proc.stdout or '').strip()
-
-            def _tail(s: str, max_lines: int = 40, max_chars: int = 4000) -> str:
-                if not s:
-                    return ''
-                lines = s.splitlines()
-                tail = '\n'.join(lines[-max_lines:])
-                if len(tail) > max_chars:
-                    tail = tail[-max_chars:]
-                return tail
-
-            stderr_tail = _tail(stderr)
-            stdout_tail = _tail(stdout)
-            details = stderr_tail or stdout_tail or 'ffsubsync failed'
-            raise RuntimeError(f'ffsubsync failed (exit_code={proc.returncode})\n{details}')
-
-        out_rel = os.path.relpath(out_abs, base_dir).replace('\\', '/')
-        video_rel = os.path.relpath(video_abs, base_dir).replace('\\', '/')
-        return {
-            'subtitle': file_path,
+        out_rel = os.path.relpath(sync_result.output_path, base_dir).replace('\\', '/')
+        result = {
+            'subtitle': subtitle_rel,
             'video': video_rel,
             'output_file': out_rel,
-            'options': {
-                'dont_fix_framerate': dont_fix_framerate,
-                'use_golden_section': use_gss,
-                'vad': vad,
+            'subtitle_language': sync_result.plan.subtitle_language_alpha2,
+            'audio_stream_index': sync_result.plan.audio_stream_index,
+            'sample_minutes': sync_result.plan.sample_minutes,
+            'offset_seconds': round(sync_result.plan.offset_seconds, 3),
+            'scale': round(sync_result.plan.scale, 6),
+            'anchors': {
+                'start': {
+                    'subtitle_index': sync_result.plan.start_anchor.subtitle_index,
+                    'subtitle_seconds': round(sync_result.plan.start_anchor.subtitle_seconds, 3),
+                    'transcript_seconds': round(sync_result.plan.start_anchor.transcript_seconds, 3),
+                    'similarity': round(sync_result.plan.start_anchor.similarity, 3),
+                },
+                'end': {
+                    'subtitle_index': sync_result.plan.end_anchor.subtitle_index,
+                    'subtitle_seconds': round(sync_result.plan.end_anchor.subtitle_seconds, 3),
+                    'transcript_seconds': round(sync_result.plan.end_anchor.transcript_seconds, 3),
+                    'similarity': round(sync_result.plan.end_anchor.similarity, 3),
+                }
             }
         }
+        logging.info(
+            'Job sync_subtitles finished subtitle=%s output=%s offset=%s scale=%s',
+            subtitle_rel,
+            out_rel,
+            result['offset_seconds'],
+            result['scale'],
+        )
+        return result
     
     def _execute_publish_subtitles(self, file_path: str, params: Dict) -> Dict:
         """Execute subtitle publish job (uploads to enabled providers that support upload)."""

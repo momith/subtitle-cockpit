@@ -4,6 +4,7 @@
   "excluded_file_types": "",
   "max_parallel_jobs": 1,
   "subtitle_max_downloads": 1,
+  "sync_sample_minutes": 3,
   "sync_dont_fix_framerate": false,
   "sync_use_golden_section": true,
   "sync_vad": "default",

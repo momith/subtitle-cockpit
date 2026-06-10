@@ -21,3 +21,4 @@ google-genai
 pyasstosrt
 subliminal
 ffsubsync
+faster-whisper

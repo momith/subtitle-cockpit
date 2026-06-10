@@ -220,20 +220,27 @@ document.addEventListener('DOMContentLoaded', function() {
     if (syncSubtitlesBtn) {
         syncSubtitlesBtn.addEventListener('click', () => {
             if (syncSubtitlesBtn.disabled) return;
-            const subtitles = Array.from(selectedFiles);
+            const pair = getSelectedSyncPair();
+            if (!pair) {
+                showToast('Select exactly one video and one SRT subtitle.', 'error');
+                return;
+            }
             (async () => {
                 try {
                     const res = await fetch('/api/sync_subtitles', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ paths: subtitles })
+                        body: JSON.stringify({
+                            video_path: pair.video,
+                            subtitle_path: pair.subtitle
+                        })
                     });
                     const data = await res.json();
                     if (data.error) {
                         showToast(`Sync failed: ${data.error}`, 'error', 7000);
                         return;
                     }
-                    showToast(`${data.message || 'Jobs added to queue'}. View progress in the Job Queue page.`, 'success');
+                    showToast(`${data.message || 'Sync job added to queue'}. View progress in the Job Queue page.`, 'success');
                     setTimeout(() => loadDirectory(currentPath || ''), 2000);
                 } catch (e) {
                     console.error('sync subtitles error', e);
@@ -259,6 +266,14 @@ document.addEventListener('DOMContentLoaded', function() {
     function isPublishableSubtitle(path){
         const ext = getExt(path);
         return ext === '.srt' || ext === '.ass' || ext === '.ssa' || ext === '.sub';
+    }
+    function getSelectedSyncPair() {
+        const arr = Array.from(selectedFiles);
+        if (arr.length !== 2) return null;
+        const videos = arr.filter(isVideo);
+        const subtitles = arr.filter(isSrt);
+        if (videos.length !== 1 || subtitles.length !== 1) return null;
+        return { video: videos[0], subtitle: subtitles[0] };
     }
 
     // Load app settings to get excluded file types
@@ -560,9 +575,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         if (syncSubtitlesBtn) {
-            const arr = Array.from(selectedFiles);
-            const allSrt = anySelected && arr.every(isSrt);
-            syncSubtitlesBtn.disabled = !allSrt;
+            syncSubtitlesBtn.disabled = !getSelectedSyncPair();
         }
 
         if (publishSubtitlesBtn) {

@@ -151,6 +151,7 @@ def _default_settings():
         'excluded_file_types': '',
         'max_parallel_jobs': 1,
         'subtitle_max_downloads': 1,
+        'sync_sample_minutes': 3,
         'sync_dont_fix_framerate': False,
         'sync_use_golden_section': False,
         'sync_vad': 'default',
@@ -331,12 +332,18 @@ def read_settings():
             excluded_file_types = str(data.get('excluded_file_types', base.get('excluded_file_types', '')))
             max_parallel_jobs = int(data.get('max_parallel_jobs', base.get('max_parallel_jobs', 1)))
             subtitle_max_downloads = int(data.get('subtitle_max_downloads', base.get('subtitle_max_downloads', 1)))
+            sync_sample_minutes = int(data.get('sync_sample_minutes', base.get('sync_sample_minutes', 3)))
+            if sync_sample_minutes < 1:
+                sync_sample_minutes = 1
+            elif sync_sample_minutes > 15:
+                sync_sample_minutes = 15
             return {
                 'root_dir': root_dir,
                 'mullvad_vpn_config_dir': mullvad_vpn_config_dir,
                 'excluded_file_types': excluded_file_types,
                 'max_parallel_jobs': max_parallel_jobs,
                 'subtitle_max_downloads': subtitle_max_downloads,
+                'sync_sample_minutes': sync_sample_minutes,
                 'sync_dont_fix_framerate': bool(data.get('sync_dont_fix_framerate', base.get('sync_dont_fix_framerate', False))),
                 'sync_use_golden_section': bool(data.get('sync_use_golden_section', base.get('sync_use_golden_section', False))),
                 'sync_vad': str(data.get('sync_vad', base.get('sync_vad', 'default')) or 'default'),
@@ -503,6 +510,12 @@ def api_settings():
     if subtitle_max_downloads < 1:
         subtitle_max_downloads = 1
 
+    sync_sample_minutes = int(payload.get('sync_sample_minutes', existing.get('sync_sample_minutes', 3)))
+    if sync_sample_minutes < 1:
+        sync_sample_minutes = 1
+    elif sync_sample_minutes > 15:
+        sync_sample_minutes = 15
+
     sync_dont_fix_framerate = bool(payload.get('sync_dont_fix_framerate', existing.get('sync_dont_fix_framerate', False)))
     sync_use_golden_section = bool(payload.get('sync_use_golden_section', existing.get('sync_use_golden_section', False)))
     sync_vad = str(payload.get('sync_vad', existing.get('sync_vad', 'default')) or 'default')
@@ -513,6 +526,7 @@ def api_settings():
         'excluded_file_types': excluded_file_types,
         'max_parallel_jobs': max_parallel_jobs,
         'subtitle_max_downloads': subtitle_max_downloads,
+        'sync_sample_minutes': sync_sample_minutes,
         'sync_dont_fix_framerate': sync_dont_fix_framerate,
         'sync_use_golden_section': sync_use_golden_section,
         'sync_vad': sync_vad,
@@ -1363,58 +1377,73 @@ def search_subtitles():
 
 @app.route('/api/sync_subtitles', methods=['POST'])
 def sync_subtitles():
-    """Queue subtitle sync jobs (ffsubsync)"""
+    """Queue subtitle sync job for exactly one video and one SRT subtitle."""
     if not job_queue:
         init_job_queue()
 
     data = request.get_json(silent=True) or {}
-    paths = data.get('paths', [])
+    video_path = data.get('video_path')
+    subtitle_path = data.get('subtitle_path')
 
-    if not isinstance(paths, list) or len(paths) == 0:
-        return jsonify({'error': 'No subtitle files provided'}), 400
+    if not isinstance(video_path, str) or not isinstance(subtitle_path, str):
+        return jsonify({'error': 'Exactly one video_path and one subtitle_path are required'}), 400
 
     settings = read_settings()
     base_dir = settings.get('root_dir') or app.config.get('BASE_DIR')
     if not base_dir:
         return jsonify({'error': 'Base directory not configured'}), 400
 
-    added_jobs = []
-    errors = []
+    def _safe_rel_path(raw_path: str) -> str:
+        rel = raw_path.replace('\\', '/').lstrip('/')
+        abs_path = os.path.abspath(os.path.join(base_dir, rel))
+        base_abs = os.path.abspath(base_dir)
+        if os.path.commonpath([base_abs, abs_path]) != base_abs:
+            raise ValueError('Path escapes the configured base directory')
+        return os.path.relpath(abs_path, base_abs).replace('\\', '/')
 
-    for rel_path in paths:
-        try:
-            safe_rel = rel_path.lstrip('/').replace('..', '')
-            abs_path = os.path.join(base_dir, safe_rel)
+    video_exts = {
+        '.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
+        '.mpeg', '.mpg', '.ts', '.m2ts'
+    }
 
-            if not os.path.isfile(abs_path):
-                errors.append({'path': rel_path, 'message': 'File not found'})
-                continue
+    try:
+        safe_video = _safe_rel_path(video_path)
+        safe_subtitle = _safe_rel_path(subtitle_path)
+        video_abs = os.path.join(base_dir, safe_video)
+        subtitle_abs = os.path.join(base_dir, safe_subtitle)
 
-            if not safe_rel.lower().endswith('.srt'):
-                errors.append({'path': rel_path, 'message': 'Only SRT subtitles are supported'})
-                continue
+        if not os.path.isfile(video_abs):
+            return jsonify({'error': 'Selected video file was not found'}), 400
+        if not os.path.isfile(subtitle_abs):
+            return jsonify({'error': 'Selected subtitle file was not found'}), 400
+        if os.path.splitext(safe_video)[1].lower() not in video_exts:
+            return jsonify({'error': 'Sync requires a supported video file'}), 400
+        if not safe_subtitle.lower().endswith('.srt'):
+            return jsonify({'error': 'Sync requires an SRT subtitle file'}), 400
 
-            job_id = job_queue.add_job(
-                JOB_TYPE_SYNC_SUBTITLES,
-                safe_rel,
-                params={
-                    'base_dir': base_dir,
-                    'settings_file': SETTINGS_FILE
-                }
-            )
-            added_jobs.append({'path': rel_path, 'job_id': job_id})
-
-        except Exception as e:
-            logging.exception(f'Error adding sync job for {rel_path}: {e}')
-            errors.append({'path': rel_path, 'message': str(e)})
-
-    if errors and not added_jobs:
-        return jsonify({'error': 'Failed to add sync job(s)', 'details': errors}), 500
+        job_id = job_queue.add_job(
+            JOB_TYPE_SYNC_SUBTITLES,
+            safe_subtitle,
+            params={
+                'base_dir': base_dir,
+                'settings_file': SETTINGS_FILE,
+                'video_path': safe_video,
+                'subtitle_path': safe_subtitle
+            }
+        )
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logging.exception(f'Error adding sync job for {subtitle_path}: {e}')
+        return jsonify({'error': f'Failed to add sync job: {e}'}), 500
 
     return jsonify({
-        'message': f'Added {len(added_jobs)} sync job(s) to queue',
-        'jobs': added_jobs,
-        'errors': errors if errors else None
+        'message': 'Added 1 sync job to queue',
+        'job': {
+            'job_id': job_id,
+            'video_path': safe_video,
+            'subtitle_path': safe_subtitle
+        }
     })
 
 
@@ -2072,4 +2101,4 @@ if __name__ == '__main__':
     os.makedirs('static/css', exist_ok=True)
     os.makedirs('static/js', exist_ok=True)
     
-    app.run(debug=True)
+    app.run(debug=False, use_reloader=False)
