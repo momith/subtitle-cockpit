@@ -262,27 +262,109 @@
                 <div class="small muted">Used for the faster-whisper sync pipeline on the selected audio track.</div>
             </div>
 
-            <div class="row inline">
-                <input type="checkbox" id="syncDontFixFramerate" />
-                <label for="syncDontFixFramerate" style="margin:0; font-weight:500;">Don't fix framerate</label>
-            </div>
-
-            <div class="row inline">
-                <input type="checkbox" id="syncUseGoldenSection" />
-                <label for="syncUseGoldenSection" style="margin:0; font-weight:500;">Use golden section search</label>
+            <div class="row">
+                <label for="syncWhisperModelInput">Whisper model</label>
+                <select id="syncWhisperModelInput">
+                    <option value="tiny">tiny</option>
+                    <option value="base">base</option>
+                    <option value="small">small</option>
+                    <option value="medium">medium</option>
+                    <option value="large-v3">large-v3</option>
+                </select>
             </div>
 
             <div class="row">
-                <label for="syncVadSelect">Voice activity detector</label>
-                <select id="syncVadSelect">
-                    <option value="default">Default</option>
-                    <option value="subs_then_webrtc">Subs then WebRTC</option>
-                    <option value="subs_then_auditok">Subs then Auditok</option>
-                    <option value="subs_then_silero">Subs then Silero</option>
-                    <option value="webrtc">WebRTC</option>
-                    <option value="auditok">Auditok</option>
-                    <option value="silero">Silero</option>
+                <label for="syncWhisperDeviceInput">Device</label>
+                <select id="syncWhisperDeviceInput">
+                    <option value="cpu">cpu</option>
+                    <option value="auto">auto</option>
+                    <option value="cuda">cuda</option>
                 </select>
+            </div>
+
+            <div class="row">
+                <label for="syncWhisperComputeTypeInput">Compute type</label>
+                <select id="syncWhisperComputeTypeInput">
+                    <option value="int8">int8</option>
+                    <option value="int16">int16</option>
+                    <option value="float16">float16</option>
+                    <option value="float32">float32</option>
+                </select>
+            </div>
+
+            <div class="row">
+                <label for="syncWhisperCpuThreadsInput">CPU threads</label>
+                <input id="syncWhisperCpuThreadsInput" type="number" min="1" max="256" step="1" value="1" />
+            </div>
+
+            <div class="row">
+                <label for="syncWhisperNumWorkersInput">Worker count</label>
+                <input id="syncWhisperNumWorkersInput" type="number" min="1" max="32" step="1" value="1" />
+            </div>
+
+            <div class="row">
+                <label for="syncWhisperBeamSizeInput">Beam size</label>
+                <input id="syncWhisperBeamSizeInput" type="number" min="1" max="16" step="1" value="1" />
+            </div>
+
+            <div class="row">
+                <label for="syncWhisperBestOfInput">Best of</label>
+                <input id="syncWhisperBestOfInput" type="number" min="1" max="16" step="1" value="1" />
+            </div>
+
+            <div class="row">
+                <label for="syncWhisperPatienceInput">Patience</label>
+                <input id="syncWhisperPatienceInput" type="number" min="0" max="4" step="0.1" value="1.0" />
+            </div>
+
+            <div class="row">
+                <label for="syncWhisperTemperatureInput">Temperature</label>
+                <input id="syncWhisperTemperatureInput" type="number" min="0" max="1" step="0.1" value="0.0" />
+            </div>
+
+            <div class="row inline">
+                <input type="checkbox" id="syncWhisperConditionOnPreviousText" />
+                <label for="syncWhisperConditionOnPreviousText" style="margin:0; font-weight:500;">Condition on previous text</label>
+            </div>
+
+            <div class="row inline">
+                <input type="checkbox" id="syncWhisperVadFilter" checked />
+                <label for="syncWhisperVadFilter" style="margin:0; font-weight:500;">Enable whisper VAD filter</label>
+            </div>
+
+            <div class="row">
+                <label for="syncAnchorMinSimilarityInput">Anchor minimum similarity</label>
+                <input id="syncAnchorMinSimilarityInput" type="number" min="0" max="1" step="0.01" value="0.5" />
+            </div>
+
+            <div class="row">
+                <label for="syncAnchorMaxWindowSizeInput">Subtitle window size</label>
+                <input id="syncAnchorMaxWindowSizeInput" type="number" min="1" max="20" step="1" value="8" />
+            </div>
+
+            <div class="row">
+                <label for="syncAnchorMaxCandidatesFromEdgesInput">Anchor edge candidates</label>
+                <input id="syncAnchorMaxCandidatesFromEdgesInput" type="number" min="1" max="10" step="1" value="2" />
+            </div>
+
+            <div class="row">
+                <label for="syncAnchorMaxPhraseSegmentsInput">Anchor phrase segments</label>
+                <input id="syncAnchorMaxPhraseSegmentsInput" type="number" min="1" max="10" step="1" value="4" />
+            </div>
+
+            <div class="row">
+                <label for="syncAnchorMinTextLengthInput">Anchor minimum text length</label>
+                <input id="syncAnchorMinTextLengthInput" type="number" min="1" max="200" step="1" value="12" />
+            </div>
+
+            <div class="row">
+                <label for="syncMaxScaleDeltaInput">Maximum scale delta</label>
+                <input id="syncMaxScaleDeltaInput" type="number" min="0" max="0.5" step="0.01" value="0.08" />
+            </div>
+
+            <div class="row">
+                <label for="syncMaxEndErrorSecondsInput">Maximum end error in seconds</label>
+                <input id="syncMaxEndErrorSecondsInput" type="number" min="0" max="10" step="0.1" value="1.0" />
             </div>
 
             <div class="actions">

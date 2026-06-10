@@ -7,7 +7,6 @@ import re
 import subprocess
 import tempfile
 import time
-from datetime import datetime
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -136,6 +135,54 @@ class LoadedSubtitles:
 class AnchorCandidate:
     normalized_text: str
     anchor_seconds: float
+
+
+@dataclass(frozen=True)
+class WhisperTranscriptionConfig:
+    model_name: str = 'tiny'
+    device: str = 'cpu'
+    compute_type: str = 'int8'
+    cpu_threads: int = 1
+    num_workers: int = 1
+    beam_size: int = 1
+    best_of: int = 1
+    patience: float = 1.0
+    temperature: float = 0.0
+    condition_on_previous_text: bool = False
+    vad_filter: bool = True
+    word_timestamps: bool = False
+
+
+@dataclass(frozen=True)
+class SyncMatchingConfig:
+    anchor_min_similarity: float = 0.5
+    anchor_max_window_size: int = 8
+    anchor_max_candidates_from_edges: int = 2
+    anchor_max_phrase_segments: int = 4
+    anchor_min_text_length: int = 12
+    max_scale_delta: float = 0.08
+    max_end_error_seconds: float = 1.0
+
+
+def default_whisper_transcription_config() -> WhisperTranscriptionConfig:
+    return WhisperTranscriptionConfig(
+        model_name=os.environ.get('SUBTITLE_SYNC_WHISPER_MODEL', 'tiny'),
+        device=os.environ.get('SUBTITLE_SYNC_WHISPER_DEVICE', 'cpu'),
+        compute_type=os.environ.get('SUBTITLE_SYNC_WHISPER_COMPUTE_TYPE', 'int8'),
+        cpu_threads=max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_CPU_THREADS', os.cpu_count() or 1)), 1),
+        num_workers=max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_NUM_WORKERS', '1')), 1),
+        beam_size=max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_BEAM_SIZE', '1')), 1),
+        best_of=max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_BEST_OF', '1')), 1),
+        patience=max(float(os.environ.get('SUBTITLE_SYNC_WHISPER_PATIENCE', '1.0')), 0.0),
+        temperature=max(float(os.environ.get('SUBTITLE_SYNC_WHISPER_TEMPERATURE', '0.0')), 0.0),
+        condition_on_previous_text=os.environ.get('SUBTITLE_SYNC_WHISPER_CONDITION_ON_PREVIOUS', '0') == '1',
+        vad_filter=os.environ.get('SUBTITLE_SYNC_WHISPER_VAD_FILTER', '1') != '0',
+        word_timestamps=os.environ.get('SUBTITLE_SYNC_WHISPER_WORD_TIMESTAMPS', '0') == '1',
+    )
+
+
+def default_sync_matching_config() -> SyncMatchingConfig:
+    return SyncMatchingConfig()
 
 
 def normalize_text(value: str) -> str:
@@ -269,19 +316,25 @@ def build_sliding_windows(cues: List[NormalizedCue], max_window_size: int = 8) -
     return windows
 
 
-def build_anchor_candidates(segments: Iterable[TranscriptSegment], from_end: bool) -> List[AnchorCandidate]:
+def build_anchor_candidates(
+    segments: Iterable[TranscriptSegment],
+    from_end: bool,
+    max_candidates_from_edges: int = 2,
+    max_phrase_segments: int = 4,
+    min_text_length: int = 12,
+) -> List[AnchorCandidate]:
     ordered = list(segments)
     if from_end:
         ordered = list(reversed(ordered))
 
     candidates: List[AnchorCandidate] = []
-    for start in range(min(len(ordered), 2)):
+    for start in range(min(len(ordered), max_candidates_from_edges)):
         parts: List[str] = []
         anchor_seconds = ordered[start].end_seconds if from_end else ordered[start].start_seconds
-        for end in range(start, min(len(ordered), start + 4)):
+        for end in range(start, min(len(ordered), start + max_phrase_segments)):
             parts.append(ordered[end].text)
             normalized = normalize_text(' '.join(parts))
-            if len(normalized) < 12:
+            if len(normalized) < min_text_length:
                 continue
             candidates.append(AnchorCandidate(normalized_text=normalized, anchor_seconds=anchor_seconds))
 
@@ -338,7 +391,12 @@ def find_anchor_match(
     )
 
 
-def calculate_linear_transform(start_anchor: AnchorMatch, end_anchor: AnchorMatch) -> tuple[float, float]:
+def calculate_linear_transform(
+    start_anchor: AnchorMatch,
+    end_anchor: AnchorMatch,
+    max_scale_delta: float = 0.08,
+    max_end_error_seconds: float = 1.0,
+) -> tuple[float, float]:
     subtitle_delta = end_anchor.subtitle_seconds - start_anchor.subtitle_seconds
     transcript_delta = end_anchor.transcript_seconds - start_anchor.transcript_seconds
 
@@ -350,14 +408,14 @@ def calculate_linear_transform(start_anchor: AnchorMatch, end_anchor: AnchorMatc
         raise SubtitleSyncError('Computed invalid subtitle scale factor')
 
     # Reject implausible drift corrections. A few percent covers timing/framerate issues.
-    if abs(scale - 1.0) > 0.08:
+    if abs(scale - 1.0) > max_scale_delta:
         raise SubtitleSyncError(f'Anchor drift is too large for a reliable linear sync (scale={scale:.5f})')
 
     offset = start_anchor.transcript_seconds - (start_anchor.subtitle_seconds * scale)
 
     predicted_end = end_anchor.subtitle_seconds * scale + offset
     end_error = abs(predicted_end - end_anchor.transcript_seconds)
-    if end_error > 1.0:
+    if end_error > max_end_error_seconds:
         raise SubtitleSyncError(f'Anchors are inconsistent (end error {end_error:.3f}s)')
 
     return offset, scale
@@ -417,8 +475,7 @@ def build_output_path(subtitle_path: str) -> str:
     source = Path(subtitle_path)
     base = source.with_suffix('')
     logger.info('subtitle_sync: build output path start subtitle=%s', subtitle_path)
-    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
-    candidate = base.parent / f'{base.name}.synced-{timestamp}.srt'
+    candidate = base.parent / f'{base.name}.synced.srt'
     logger.info('subtitle_sync: resolved output path=%s', candidate)
     return str(candidate)
 
@@ -528,36 +585,42 @@ def _get_whisper_model(model_name: str, device: str, compute_type: str, cpu_thre
     return model
 
 
-def transcribe_audio(audio_path: str, language_alpha2: str, model_name: str = 'tiny') -> List[TranscriptSegment]:
-    model_name = os.environ.get('SUBTITLE_SYNC_WHISPER_MODEL', model_name)
-    device = os.environ.get('SUBTITLE_SYNC_WHISPER_DEVICE', 'cpu')
-    compute_type = os.environ.get('SUBTITLE_SYNC_WHISPER_COMPUTE_TYPE', 'int8')
-    cpu_threads = max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_CPU_THREADS', os.cpu_count() or 1)), 1)
-    num_workers = max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_NUM_WORKERS', '1')), 1)
-    beam_size = max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_BEAM_SIZE', '1')), 1)
-    best_of = max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_BEST_OF', '1')), 1)
-    condition_on_previous_text = os.environ.get('SUBTITLE_SYNC_WHISPER_CONDITION_ON_PREVIOUS', '0') == '1'
-    model = _get_whisper_model(model_name, device, compute_type, cpu_threads, num_workers)
+def transcribe_audio(
+    audio_path: str,
+    language_alpha2: str,
+    config: Optional[WhisperTranscriptionConfig] = None,
+) -> List[TranscriptSegment]:
+    config = config or default_whisper_transcription_config()
+    model = _get_whisper_model(
+        config.model_name,
+        config.device,
+        config.compute_type,
+        max(config.cpu_threads, 1),
+        max(config.num_workers, 1),
+    )
     started_at = time.perf_counter()
     logger.info(
-        'subtitle_sync: starting transcription audio=%s model=%s language=%s beam_size=%s best_of=%s condition_on_previous_text=%s',
+        'subtitle_sync: starting transcription audio=%s model=%s language=%s beam_size=%s best_of=%s patience=%s temperature=%s condition_on_previous_text=%s vad_filter=%s',
         audio_path,
-        model_name,
+        config.model_name,
         language_alpha2,
-        beam_size,
-        best_of,
-        condition_on_previous_text,
+        config.beam_size,
+        config.best_of,
+        config.patience,
+        config.temperature,
+        config.condition_on_previous_text,
+        config.vad_filter,
     )
     segments, _info = model.transcribe(
         audio_path,
         language=language_alpha2,
-        vad_filter=True,
-        beam_size=beam_size,
-        best_of=best_of,
-        patience=1,
-        condition_on_previous_text=condition_on_previous_text,
-        temperature=0.0,
-        word_timestamps=False,
+        vad_filter=config.vad_filter,
+        beam_size=max(config.beam_size, 1),
+        best_of=max(config.best_of, 1),
+        patience=max(config.patience, 0.0),
+        condition_on_previous_text=config.condition_on_previous_text,
+        temperature=max(config.temperature, 0.0),
+        word_timestamps=config.word_timestamps,
     )
     result: List[TranscriptSegment] = []
     for segment in segments:
@@ -586,10 +649,14 @@ def plan_sync(
     video_path: str,
     subtitle_path: str,
     sample_minutes: int,
+    transcription_config: Optional[WhisperTranscriptionConfig] = None,
+    matching_config: Optional[SyncMatchingConfig] = None,
     metadata_provider: Callable[[str], VideoMetadata] = probe_video_metadata,
     audio_extractor: Callable[[str, int, AudioSampleWindow, str], str] = extract_audio_window,
-    transcriber: Callable[[str, str], List[TranscriptSegment]] = transcribe_audio,
+    transcriber: Callable[[str, str, Optional[WhisperTranscriptionConfig]], List[TranscriptSegment]] = transcribe_audio,
 ) -> SyncPlan:
+    transcription_config = transcription_config or default_whisper_transcription_config()
+    matching_config = matching_config or default_sync_matching_config()
     sync_started_at = time.perf_counter()
     logger.info('subtitle_sync: plan start video=%s subtitle=%s sample_minutes=%s', video_path, subtitle_path, sample_minutes)
 
@@ -615,7 +682,7 @@ def plan_sync(
 
     started_at = time.perf_counter()
     cues = load_normalized_cues(subtitle_path)
-    cue_windows = build_sliding_windows(cues)
+    cue_windows = build_sliding_windows(cues, max_window_size=matching_config.anchor_max_window_size)
     logger.info(
         'subtitle_sync: loaded subtitle cues count=%s sliding_windows=%s in %.2fs',
         len(cues),
@@ -627,7 +694,7 @@ def plan_sync(
     with tempfile.TemporaryDirectory(prefix='subtitle-sync-') as temp_dir:
         for window in sample_windows:
             audio_path = audio_extractor(video_path, audio_stream.index, window, temp_dir)
-            segments = transcriber(audio_path, subtitle_language_alpha2)
+            segments = transcriber(audio_path, subtitle_language_alpha2, transcription_config)
             transcripts[window.name] = [
                 TranscriptSegment(
                     text=segment.text,
@@ -643,8 +710,20 @@ def plan_sync(
             )
 
     started_at = time.perf_counter()
-    start_candidates = build_anchor_candidates(transcripts['start'], from_end=False)
-    end_candidates = build_anchor_candidates(transcripts['end'], from_end=True)
+    start_candidates = build_anchor_candidates(
+        transcripts['start'],
+        from_end=False,
+        max_candidates_from_edges=matching_config.anchor_max_candidates_from_edges,
+        max_phrase_segments=matching_config.anchor_max_phrase_segments,
+        min_text_length=matching_config.anchor_min_text_length,
+    )
+    end_candidates = build_anchor_candidates(
+        transcripts['end'],
+        from_end=True,
+        max_candidates_from_edges=matching_config.anchor_max_candidates_from_edges,
+        max_phrase_segments=matching_config.anchor_max_phrase_segments,
+        min_text_length=matching_config.anchor_min_text_length,
+    )
     logger.info(
         'subtitle_sync: built anchor candidates start=%s end=%s in %.2fs',
         len(start_candidates),
@@ -659,6 +738,7 @@ def plan_sync(
         candidates=start_candidates,
         window_name='start',
         search_from_end=False,
+        min_similarity=matching_config.anchor_min_similarity,
     )
     end_anchor = find_anchor_match(
         cues=cues,
@@ -666,6 +746,7 @@ def plan_sync(
         candidates=end_candidates,
         window_name='end',
         search_from_end=True,
+        min_similarity=matching_config.anchor_min_similarity,
     )
     logger.info(
         'subtitle_sync: matched anchors start_index=%s end_index=%s start_similarity=%.3f end_similarity=%.3f in %.2fs',
@@ -677,7 +758,12 @@ def plan_sync(
     )
 
     started_at = time.perf_counter()
-    offset_seconds, scale = calculate_linear_transform(start_anchor, end_anchor)
+    offset_seconds, scale = calculate_linear_transform(
+        start_anchor,
+        end_anchor,
+        max_scale_delta=matching_config.max_scale_delta,
+        max_end_error_seconds=matching_config.max_end_error_seconds,
+    )
     logger.info(
         'subtitle_sync: computed linear transform offset=%.3fs scale=%.6f in %.2fs total=%.2fs',
         offset_seconds,
@@ -704,9 +790,11 @@ def sync_subtitle_file(
     subtitle_path: str,
     sample_minutes: int,
     output_path: Optional[str] = None,
+    transcription_config: Optional[WhisperTranscriptionConfig] = None,
+    matching_config: Optional[SyncMatchingConfig] = None,
     metadata_provider: Callable[[str], VideoMetadata] = probe_video_metadata,
     audio_extractor: Callable[[str, int, AudioSampleWindow, str], str] = extract_audio_window,
-    transcriber: Callable[[str, str], List[TranscriptSegment]] = transcribe_audio,
+    transcriber: Callable[[str, str, Optional[WhisperTranscriptionConfig]], List[TranscriptSegment]] = transcribe_audio,
 ) -> SyncResult:
     logger.info(
         'subtitle_sync: sync file start video=%s subtitle=%s sample_minutes=%s output_override=%s',
@@ -719,6 +807,8 @@ def sync_subtitle_file(
         video_path=video_path,
         subtitle_path=subtitle_path,
         sample_minutes=sample_minutes,
+        transcription_config=transcription_config,
+        matching_config=matching_config,
         metadata_provider=metadata_provider,
         audio_extractor=audio_extractor,
         transcriber=transcriber,

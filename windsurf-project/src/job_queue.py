@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Callable
 import subprocess
 import os
-from subtitle_sync import SubtitleSyncError, sync_subtitle_file
+from subtitle_sync import SubtitleSyncError, SyncMatchingConfig, WhisperTranscriptionConfig, sync_subtitle_file
 
 # Job status constants
 STATUS_PENDING = 'pending'
@@ -739,12 +739,42 @@ class JobQueue:
         if sample_minutes < 1:
             sample_minutes = 1
 
+        transcription_config = WhisperTranscriptionConfig(
+            model_name=str(settings.get('sync_whisper_model', 'tiny') or 'tiny'),
+            device=str(settings.get('sync_whisper_device', 'cpu') or 'cpu'),
+            compute_type=str(settings.get('sync_whisper_compute_type', 'int8') or 'int8'),
+            cpu_threads=max(int(settings.get('sync_whisper_cpu_threads', os.cpu_count() or 1) or (os.cpu_count() or 1)), 1),
+            num_workers=max(int(settings.get('sync_whisper_num_workers', 1) or 1), 1),
+            beam_size=max(int(settings.get('sync_whisper_beam_size', 1) or 1), 1),
+            best_of=max(int(settings.get('sync_whisper_best_of', 1) or 1), 1),
+            patience=max(float(settings.get('sync_whisper_patience', 1.0) or 1.0), 0.0),
+            temperature=max(float(settings.get('sync_whisper_temperature', 0.0) or 0.0), 0.0),
+            condition_on_previous_text=bool(settings.get('sync_whisper_condition_on_previous_text', False)),
+            vad_filter=bool(settings.get('sync_whisper_vad_filter', True)),
+        )
+        matching_config = SyncMatchingConfig(
+            anchor_min_similarity=max(float(settings.get('sync_anchor_min_similarity', 0.5) or 0.5), 0.0),
+            anchor_max_window_size=max(int(settings.get('sync_anchor_max_window_size', 8) or 8), 1),
+            anchor_max_candidates_from_edges=max(int(settings.get('sync_anchor_max_candidates_from_edges', 2) or 2), 1),
+            anchor_max_phrase_segments=max(int(settings.get('sync_anchor_max_phrase_segments', 4) or 4), 1),
+            anchor_min_text_length=max(int(settings.get('sync_anchor_min_text_length', 12) or 12), 1),
+            max_scale_delta=max(float(settings.get('sync_max_scale_delta', 0.08) or 0.08), 0.0),
+            max_end_error_seconds=max(float(settings.get('sync_max_end_error_seconds', 1.0) or 1.0), 0.0),
+        )
+
         logging.info(
-            'Job sync_subtitles starting subtitle=%s video=%s sample_minutes=%s settings_file=%s',
+            'Job sync_subtitles starting subtitle=%s video=%s sample_minutes=%s settings_file=%s model=%s device=%s compute_type=%s cpu_threads=%s num_workers=%s beam_size=%s best_of=%s',
             sub_abs,
             video_abs,
             sample_minutes,
             settings_file,
+            transcription_config.model_name,
+            transcription_config.device,
+            transcription_config.compute_type,
+            transcription_config.cpu_threads,
+            transcription_config.num_workers,
+            transcription_config.beam_size,
+            transcription_config.best_of,
         )
 
         try:
@@ -752,6 +782,8 @@ class JobQueue:
                 video_path=video_abs,
                 subtitle_path=sub_abs,
                 sample_minutes=sample_minutes,
+                transcription_config=transcription_config,
+                matching_config=matching_config,
             )
         except SubtitleSyncError as exc:
             raise RuntimeError(str(exc)) from exc

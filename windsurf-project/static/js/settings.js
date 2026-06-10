@@ -39,9 +39,24 @@ document.addEventListener('DOMContentLoaded', () => {
   const subdlApiKey = document.getElementById('subdlApiKey');
   const subdlUploadToken = document.getElementById('subdlUploadToken');
   const syncSampleMinutesInput = document.getElementById('syncSampleMinutesInput');
-  const syncDontFixFramerate = document.getElementById('syncDontFixFramerate');
-  const syncUseGoldenSection = document.getElementById('syncUseGoldenSection');
-  const syncVadSelect = document.getElementById('syncVadSelect');
+  const syncWhisperModelInput = document.getElementById('syncWhisperModelInput');
+  const syncWhisperDeviceInput = document.getElementById('syncWhisperDeviceInput');
+  const syncWhisperComputeTypeInput = document.getElementById('syncWhisperComputeTypeInput');
+  const syncWhisperCpuThreadsInput = document.getElementById('syncWhisperCpuThreadsInput');
+  const syncWhisperNumWorkersInput = document.getElementById('syncWhisperNumWorkersInput');
+  const syncWhisperBeamSizeInput = document.getElementById('syncWhisperBeamSizeInput');
+  const syncWhisperBestOfInput = document.getElementById('syncWhisperBestOfInput');
+  const syncWhisperPatienceInput = document.getElementById('syncWhisperPatienceInput');
+  const syncWhisperTemperatureInput = document.getElementById('syncWhisperTemperatureInput');
+  const syncWhisperConditionOnPreviousText = document.getElementById('syncWhisperConditionOnPreviousText');
+  const syncWhisperVadFilter = document.getElementById('syncWhisperVadFilter');
+  const syncAnchorMinSimilarityInput = document.getElementById('syncAnchorMinSimilarityInput');
+  const syncAnchorMaxWindowSizeInput = document.getElementById('syncAnchorMaxWindowSizeInput');
+  const syncAnchorMaxCandidatesFromEdgesInput = document.getElementById('syncAnchorMaxCandidatesFromEdgesInput');
+  const syncAnchorMaxPhraseSegmentsInput = document.getElementById('syncAnchorMaxPhraseSegmentsInput');
+  const syncAnchorMinTextLengthInput = document.getElementById('syncAnchorMinTextLengthInput');
+  const syncMaxScaleDeltaInput = document.getElementById('syncMaxScaleDeltaInput');
+  const syncMaxEndErrorSecondsInput = document.getElementById('syncMaxEndErrorSecondsInput');
 
   let allowedProviders = [];
   let currentSettings = null;
@@ -138,9 +153,24 @@ document.addEventListener('DOMContentLoaded', () => {
       maxCharsPerRequestInput.value = Number((currentSettings.max_chars_per_request && currentSettings.max_chars_per_request[curProv]) || 0);
     }
     if (syncSampleMinutesInput) syncSampleMinutesInput.value = Number(currentSettings.sync_sample_minutes || 3);
-    if (syncDontFixFramerate) syncDontFixFramerate.checked = !!currentSettings.sync_dont_fix_framerate;
-    if (syncUseGoldenSection) syncUseGoldenSection.checked = !!currentSettings.sync_use_golden_section;
-    if (syncVadSelect) syncVadSelect.value = currentSettings.sync_vad || 'default';
+    if (syncWhisperModelInput) syncWhisperModelInput.value = currentSettings.sync_whisper_model || 'tiny';
+    if (syncWhisperDeviceInput) syncWhisperDeviceInput.value = currentSettings.sync_whisper_device || 'cpu';
+    if (syncWhisperComputeTypeInput) syncWhisperComputeTypeInput.value = currentSettings.sync_whisper_compute_type || 'int8';
+    if (syncWhisperCpuThreadsInput) syncWhisperCpuThreadsInput.value = Number(currentSettings.sync_whisper_cpu_threads || 1);
+    if (syncWhisperNumWorkersInput) syncWhisperNumWorkersInput.value = Number(currentSettings.sync_whisper_num_workers || 1);
+    if (syncWhisperBeamSizeInput) syncWhisperBeamSizeInput.value = Number(currentSettings.sync_whisper_beam_size || 1);
+    if (syncWhisperBestOfInput) syncWhisperBestOfInput.value = Number(currentSettings.sync_whisper_best_of || 1);
+    if (syncWhisperPatienceInput) syncWhisperPatienceInput.value = Number(currentSettings.sync_whisper_patience ?? 1.0);
+    if (syncWhisperTemperatureInput) syncWhisperTemperatureInput.value = Number(currentSettings.sync_whisper_temperature ?? 0.0);
+    if (syncWhisperConditionOnPreviousText) syncWhisperConditionOnPreviousText.checked = !!currentSettings.sync_whisper_condition_on_previous_text;
+    if (syncWhisperVadFilter) syncWhisperVadFilter.checked = currentSettings.sync_whisper_vad_filter !== false;
+    if (syncAnchorMinSimilarityInput) syncAnchorMinSimilarityInput.value = Number(currentSettings.sync_anchor_min_similarity ?? 0.5);
+    if (syncAnchorMaxWindowSizeInput) syncAnchorMaxWindowSizeInput.value = Number(currentSettings.sync_anchor_max_window_size || 8);
+    if (syncAnchorMaxCandidatesFromEdgesInput) syncAnchorMaxCandidatesFromEdgesInput.value = Number(currentSettings.sync_anchor_max_candidates_from_edges || 2);
+    if (syncAnchorMaxPhraseSegmentsInput) syncAnchorMaxPhraseSegmentsInput.value = Number(currentSettings.sync_anchor_max_phrase_segments || 4);
+    if (syncAnchorMinTextLengthInput) syncAnchorMinTextLengthInput.value = Number(currentSettings.sync_anchor_min_text_length || 12);
+    if (syncMaxScaleDeltaInput) syncMaxScaleDeltaInput.value = Number(currentSettings.sync_max_scale_delta ?? 0.08);
+    if (syncMaxEndErrorSecondsInput) syncMaxEndErrorSecondsInput.value = Number(currentSettings.sync_max_end_error_seconds ?? 1.0);
     renderGlobals();
     await loadVpnConfigs();
     renderKeysSection();
@@ -472,9 +502,24 @@ document.addEventListener('DOMContentLoaded', () => {
         Gemini: editedKeys.Gemini.map(copyKeyObj)
       },
       sync_sample_minutes: Number(syncSampleMinutesInput ? (syncSampleMinutesInput.value || 3) : 3),
-      sync_dont_fix_framerate: !!(syncDontFixFramerate && syncDontFixFramerate.checked),
-      sync_use_golden_section: !!(syncUseGoldenSection && syncUseGoldenSection.checked),
-      sync_vad: (syncVadSelect ? (syncVadSelect.value || 'default') : 'default')
+      sync_whisper_model: (syncWhisperModelInput ? (syncWhisperModelInput.value || 'tiny') : 'tiny'),
+      sync_whisper_device: (syncWhisperDeviceInput ? (syncWhisperDeviceInput.value || 'cpu') : 'cpu'),
+      sync_whisper_compute_type: (syncWhisperComputeTypeInput ? (syncWhisperComputeTypeInput.value || 'int8') : 'int8'),
+      sync_whisper_cpu_threads: Number(syncWhisperCpuThreadsInput ? (syncWhisperCpuThreadsInput.value || 1) : 1),
+      sync_whisper_num_workers: Number(syncWhisperNumWorkersInput ? (syncWhisperNumWorkersInput.value || 1) : 1),
+      sync_whisper_beam_size: Number(syncWhisperBeamSizeInput ? (syncWhisperBeamSizeInput.value || 1) : 1),
+      sync_whisper_best_of: Number(syncWhisperBestOfInput ? (syncWhisperBestOfInput.value || 1) : 1),
+      sync_whisper_patience: Number(syncWhisperPatienceInput ? (syncWhisperPatienceInput.value || 1.0) : 1.0),
+      sync_whisper_temperature: Number(syncWhisperTemperatureInput ? (syncWhisperTemperatureInput.value || 0.0) : 0.0),
+      sync_whisper_condition_on_previous_text: !!(syncWhisperConditionOnPreviousText && syncWhisperConditionOnPreviousText.checked),
+      sync_whisper_vad_filter: !!(syncWhisperVadFilter && syncWhisperVadFilter.checked),
+      sync_anchor_min_similarity: Number(syncAnchorMinSimilarityInput ? (syncAnchorMinSimilarityInput.value || 0.5) : 0.5),
+      sync_anchor_max_window_size: Number(syncAnchorMaxWindowSizeInput ? (syncAnchorMaxWindowSizeInput.value || 8) : 8),
+      sync_anchor_max_candidates_from_edges: Number(syncAnchorMaxCandidatesFromEdgesInput ? (syncAnchorMaxCandidatesFromEdgesInput.value || 2) : 2),
+      sync_anchor_max_phrase_segments: Number(syncAnchorMaxPhraseSegmentsInput ? (syncAnchorMaxPhraseSegmentsInput.value || 4) : 4),
+      sync_anchor_min_text_length: Number(syncAnchorMinTextLengthInput ? (syncAnchorMinTextLengthInput.value || 12) : 12),
+      sync_max_scale_delta: Number(syncMaxScaleDeltaInput ? (syncMaxScaleDeltaInput.value || 0.08) : 0.08),
+      sync_max_end_error_seconds: Number(syncMaxEndErrorSecondsInput ? (syncMaxEndErrorSecondsInput.value || 1.0) : 1.0)
     };
     try {
       const res = await fetch('/api/settings', {
@@ -517,9 +562,24 @@ document.addEventListener('DOMContentLoaded', () => {
           geminiModelInput.value = currentSettings.gemini_model || 'gemini-2.0-flash';
         }
         if (syncSampleMinutesInput) syncSampleMinutesInput.value = Number(currentSettings.sync_sample_minutes || 3);
-        if (syncDontFixFramerate) syncDontFixFramerate.checked = !!currentSettings.sync_dont_fix_framerate;
-        if (syncUseGoldenSection) syncUseGoldenSection.checked = !!currentSettings.sync_use_golden_section;
-        if (syncVadSelect) syncVadSelect.value = currentSettings.sync_vad || 'default';
+        if (syncWhisperModelInput) syncWhisperModelInput.value = currentSettings.sync_whisper_model || 'tiny';
+        if (syncWhisperDeviceInput) syncWhisperDeviceInput.value = currentSettings.sync_whisper_device || 'cpu';
+        if (syncWhisperComputeTypeInput) syncWhisperComputeTypeInput.value = currentSettings.sync_whisper_compute_type || 'int8';
+        if (syncWhisperCpuThreadsInput) syncWhisperCpuThreadsInput.value = Number(currentSettings.sync_whisper_cpu_threads || 1);
+        if (syncWhisperNumWorkersInput) syncWhisperNumWorkersInput.value = Number(currentSettings.sync_whisper_num_workers || 1);
+        if (syncWhisperBeamSizeInput) syncWhisperBeamSizeInput.value = Number(currentSettings.sync_whisper_beam_size || 1);
+        if (syncWhisperBestOfInput) syncWhisperBestOfInput.value = Number(currentSettings.sync_whisper_best_of || 1);
+        if (syncWhisperPatienceInput) syncWhisperPatienceInput.value = Number(currentSettings.sync_whisper_patience ?? 1.0);
+        if (syncWhisperTemperatureInput) syncWhisperTemperatureInput.value = Number(currentSettings.sync_whisper_temperature ?? 0.0);
+        if (syncWhisperConditionOnPreviousText) syncWhisperConditionOnPreviousText.checked = !!currentSettings.sync_whisper_condition_on_previous_text;
+        if (syncWhisperVadFilter) syncWhisperVadFilter.checked = currentSettings.sync_whisper_vad_filter !== false;
+        if (syncAnchorMinSimilarityInput) syncAnchorMinSimilarityInput.value = Number(currentSettings.sync_anchor_min_similarity ?? 0.5);
+        if (syncAnchorMaxWindowSizeInput) syncAnchorMaxWindowSizeInput.value = Number(currentSettings.sync_anchor_max_window_size || 8);
+        if (syncAnchorMaxCandidatesFromEdgesInput) syncAnchorMaxCandidatesFromEdgesInput.value = Number(currentSettings.sync_anchor_max_candidates_from_edges || 2);
+        if (syncAnchorMaxPhraseSegmentsInput) syncAnchorMaxPhraseSegmentsInput.value = Number(currentSettings.sync_anchor_max_phrase_segments || 4);
+        if (syncAnchorMinTextLengthInput) syncAnchorMinTextLengthInput.value = Number(currentSettings.sync_anchor_min_text_length || 12);
+        if (syncMaxScaleDeltaInput) syncMaxScaleDeltaInput.value = Number(currentSettings.sync_max_scale_delta ?? 0.08);
+        if (syncMaxEndErrorSecondsInput) syncMaxEndErrorSecondsInput.value = Number(currentSettings.sync_max_end_error_seconds ?? 1.0);
         await loadVpnConfigs();
         renderKeysSection();
         setStatus('Saved');
