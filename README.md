@@ -1,8 +1,21 @@
 ## Overview
 
-A comprehensive web-based subtitle processing application with support for OCR conversion, translation, subtitle search, and file management. The application runs in Docker and provides a modern web interface for managing subtitle workflows.
+A comprehensive web-based subtitle processing application with support for OCR conversion, translation, subtitle search and sync and file management. The application runs in Docker and provides a modern web interface for managing subtitle workflows.
 
 ![Translating](images/UI.png)
+
+## Features
+
+* Extracting SUB/SUB/SRT from video files
+* Converting SUP/SUB to SRT via OCR
+* Translating SRT files via public translation providers
+* Searching/Downloading matching SRT files from public providers
+* Synchronizing SRT with audio track of video file
+* Basic file management and Upload/Download
+
+## Limitations
+
+This application is tested with english and german video files. There might be unknown limitations or issues with other languages, for example languages written in non-Latin scripts.
 
 ## Motivation
 
