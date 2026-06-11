@@ -95,6 +95,14 @@ class SyncPlan:
 
 
 @dataclass(frozen=True)
+class PiecewiseSegment:
+    start_subtitle_seconds: float
+    end_subtitle_seconds: float
+    offset_seconds: float
+    scale: float
+
+
+@dataclass(frozen=True)
 class SyncResult:
     plan: SyncPlan
     output_path: str
@@ -155,11 +163,11 @@ class WhisperTranscriptionConfig:
 
 @dataclass(frozen=True)
 class SyncMatchingConfig:
-    anchor_min_similarity: float = 0.5
-    anchor_max_window_size: int = 8
-    anchor_max_candidates_from_edges: int = 2
-    anchor_max_phrase_segments: int = 4
-    anchor_min_text_length: int = 12
+    anchor_min_similarity: float = 0.38
+    anchor_max_window_size: int = 5
+    anchor_max_candidates_from_edges: int = 8
+    anchor_max_phrase_segments: int = 3
+    anchor_min_text_length: int = 18
     max_scale_delta: float = 0.08
     max_end_error_seconds: float = 1.0
 
@@ -171,13 +179,13 @@ def default_whisper_transcription_config() -> WhisperTranscriptionConfig:
         compute_type=os.environ.get('SUBTITLE_SYNC_WHISPER_COMPUTE_TYPE', 'int8'),
         cpu_threads=max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_CPU_THREADS', os.cpu_count() or 1)), 1),
         num_workers=max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_NUM_WORKERS', '1')), 1),
-        beam_size=max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_BEAM_SIZE', '1')), 1),
-        best_of=max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_BEST_OF', '1')), 1),
+        beam_size=max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_BEAM_SIZE', '3')), 1),
+        best_of=max(int(os.environ.get('SUBTITLE_SYNC_WHISPER_BEST_OF', '3')), 1),
         patience=max(float(os.environ.get('SUBTITLE_SYNC_WHISPER_PATIENCE', '1.0')), 0.0),
         temperature=max(float(os.environ.get('SUBTITLE_SYNC_WHISPER_TEMPERATURE', '0.0')), 0.0),
         condition_on_previous_text=os.environ.get('SUBTITLE_SYNC_WHISPER_CONDITION_ON_PREVIOUS', '0') == '1',
         vad_filter=os.environ.get('SUBTITLE_SYNC_WHISPER_VAD_FILTER', '1') != '0',
-        word_timestamps=os.environ.get('SUBTITLE_SYNC_WHISPER_WORD_TIMESTAMPS', '0') == '1',
+        word_timestamps=os.environ.get('SUBTITLE_SYNC_WHISPER_WORD_TIMESTAMPS', '1') != '0',
     )
 
 
@@ -269,6 +277,30 @@ def build_sample_windows(duration_seconds: float, sample_minutes: int) -> List[A
         AudioSampleWindow(name='start', start_seconds=0.0, duration_seconds=head_duration),
         AudioSampleWindow(name='end', start_seconds=tail_start, duration_seconds=tail_duration),
     ]
+    return windows
+
+
+def build_full_transcription_windows(duration_seconds: float, chunk_minutes: int) -> List[AudioSampleWindow]:
+    if duration_seconds <= 0:
+        raise SubtitleSyncError('Video duration must be greater than zero')
+    if chunk_minutes < 1:
+        raise SubtitleSyncError('chunk_minutes must be at least 1')
+
+    chunk_seconds = float(chunk_minutes) * 60.0
+    windows: List[AudioSampleWindow] = []
+    cursor = 0.0
+    index = 1
+    while cursor < duration_seconds:
+        duration = min(chunk_seconds, duration_seconds - cursor)
+        windows.append(
+            AudioSampleWindow(
+                name=f'full_{index:03d}',
+                start_seconds=cursor,
+                duration_seconds=duration,
+            )
+        )
+        cursor += duration
+        index += 1
     return windows
 
 
@@ -785,6 +817,585 @@ def plan_sync(
     )
 
 
+@dataclass(frozen=True)
+class HeavyTranscriptPhrase:
+    phrase_index: int
+    transcript_seconds: float
+    normalized_text: str
+
+
+@dataclass(frozen=True)
+class HeavyMatchCandidate:
+    phrase_index: int
+    transcript_seconds: float
+    subtitle_index: int
+    subtitle_seconds: float
+    similarity: float
+    score: float
+
+
+def build_full_transcript_segments(
+    video_path: str,
+    stream_index: int,
+    duration_seconds: float,
+    language_alpha2: str,
+    transcription_config: WhisperTranscriptionConfig,
+    chunk_minutes: int,
+) -> List[TranscriptSegment]:
+    chunk_seconds = max(float(chunk_minutes) * 60.0, 60.0)
+    segments: List[TranscriptSegment] = []
+    model = _get_whisper_model(
+        transcription_config.model_name,
+        transcription_config.device,
+        transcription_config.compute_type,
+        max(transcription_config.cpu_threads, 1),
+        max(transcription_config.num_workers, 1),
+    )
+
+    with tempfile.TemporaryDirectory(prefix='subtitle-sync-heavy-transcript-') as temp_dir:
+        chunk_index = 0
+        chunk_start = 0.0
+        while chunk_start < duration_seconds:
+            chunk_duration = min(chunk_seconds, duration_seconds - chunk_start)
+            window = AudioSampleWindow(
+                name=f'full_{chunk_index}',
+                start_seconds=chunk_start,
+                duration_seconds=chunk_duration,
+            )
+            audio_path = extract_audio_window(video_path, stream_index, window, temp_dir)
+            whisper_segments, _info = model.transcribe(
+                audio_path,
+                language=language_alpha2,
+                vad_filter=transcription_config.vad_filter,
+                beam_size=max(transcription_config.beam_size, 1),
+                best_of=max(transcription_config.best_of, 1),
+                patience=max(transcription_config.patience, 0.0),
+                condition_on_previous_text=transcription_config.condition_on_previous_text,
+                temperature=max(transcription_config.temperature, 0.0),
+                word_timestamps=transcription_config.word_timestamps,
+            )
+            for whisper_segment in whisper_segments:
+                text = str(getattr(whisper_segment, 'text', '') or '').strip()
+                if not text:
+                    continue
+
+                words = list(getattr(whisper_segment, 'words', []) or [])
+                timed_words = [
+                    word for word in words
+                    if getattr(word, 'start', None) is not None and getattr(word, 'end', None) is not None
+                ]
+                relative_start = float(getattr(whisper_segment, 'start', 0.0))
+                relative_end = float(getattr(whisper_segment, 'end', 0.0))
+                if timed_words:
+                    relative_start = float(getattr(timed_words[0], 'start', relative_start))
+                    relative_end = float(getattr(timed_words[-1], 'end', relative_end))
+
+                segments.append(
+                    TranscriptSegment(
+                        text=text,
+                        start_seconds=relative_start + chunk_start,
+                        end_seconds=relative_end + chunk_start,
+                    )
+                )
+
+            chunk_start += chunk_duration
+            chunk_index += 1
+
+    if not segments:
+        raise SubtitleSyncError('Heavy path did not produce any transcript segments')
+    return segments
+
+
+def build_heavy_transcript_phrases(
+    transcript_segments: List[TranscriptSegment],
+    step_segments: int = 4,
+    max_phrase_segments: int = 3,
+    min_text_length: int = 18,
+) -> List[HeavyTranscriptPhrase]:
+    phrases: List[HeavyTranscriptPhrase] = []
+    for start_index in range(0, len(transcript_segments), max(step_segments, 1)):
+        parts: List[str] = []
+        for end_index in range(start_index, min(len(transcript_segments), start_index + max_phrase_segments)):
+            parts.append(transcript_segments[end_index].text)
+            normalized = normalize_text(' '.join(parts))
+            if len(normalized) < min_text_length:
+                continue
+            phrases.append(
+                HeavyTranscriptPhrase(
+                    phrase_index=len(phrases),
+                    transcript_seconds=transcript_segments[start_index].start_seconds,
+                    normalized_text=normalized,
+                )
+            )
+            break
+
+    if len(phrases) < 3:
+        raise SubtitleSyncError('Heavy path could not build enough transcript phrases for alignment')
+    return phrases
+
+
+def compute_heavy_text_similarity(phrase_text: str, subtitle_text: str) -> float:
+    phrase_tokens = [token for token in phrase_text.split() if token]
+    subtitle_tokens = [token for token in subtitle_text.split() if token]
+    if not phrase_tokens or not subtitle_tokens:
+        return 0.0
+
+    phrase_set = set(phrase_tokens)
+    subtitle_set = set(subtitle_tokens)
+    overlap = len(phrase_set & subtitle_set)
+    max_token_count = max(len(phrase_set), len(subtitle_set), 1)
+    token_overlap = overlap / max_token_count
+
+    sequence_ratio = _similarity(phrase_text, subtitle_text)
+    token_ratio = _similarity(' '.join(sorted(phrase_set)), ' '.join(sorted(subtitle_set)))
+    return max(sequence_ratio, (token_overlap * 0.55) + (token_ratio * 0.45))
+
+
+def build_heavy_match_candidates(
+    phrase: HeavyTranscriptPhrase,
+    cue_windows: List[SlidingCueWindow],
+    cue_count: int,
+    phrase_count: int,
+    matching_config: SyncMatchingConfig,
+    search_radius: int,
+) -> List[HeavyMatchCandidate]:
+    cue_denominator = max(cue_count - 1, 1)
+    phrase_denominator = max(phrase_count - 1, 1)
+    expected_index = int(round((phrase.phrase_index / phrase_denominator) * cue_denominator))
+    lower_bound = max(0, expected_index - search_radius)
+    upper_bound = min(cue_count - 1, expected_index + search_radius)
+
+    candidates: List[HeavyMatchCandidate] = []
+    for window in cue_windows:
+        if window.start_index < lower_bound or window.end_index > upper_bound:
+            continue
+        similarity = compute_heavy_text_similarity(phrase.normalized_text, window.normalized_text)
+        if similarity < matching_config.anchor_min_similarity:
+            continue
+        positional_penalty = abs(window.start_index - expected_index) / max(search_radius, 1)
+        score = similarity - (positional_penalty * 0.18)
+        candidates.append(
+            HeavyMatchCandidate(
+                phrase_index=phrase.phrase_index,
+                transcript_seconds=phrase.transcript_seconds,
+                subtitle_index=window.start_index,
+                subtitle_seconds=window.start_seconds,
+                similarity=similarity,
+                score=score,
+            )
+        )
+
+    candidates.sort(
+        key=lambda candidate: (
+            candidate.score,
+            candidate.similarity,
+            -abs(candidate.subtitle_index - expected_index),
+        ),
+        reverse=True,
+    )
+    return candidates[:max(matching_config.anchor_max_candidates_from_edges, 1)]
+
+
+def _heavy_transition_penalty(
+    previous: HeavyMatchCandidate,
+    current: HeavyMatchCandidate,
+    cue_count: int,
+    phrase_count: int,
+) -> float:
+    subtitle_delta = current.subtitle_seconds - previous.subtitle_seconds
+    transcript_delta = current.transcript_seconds - previous.transcript_seconds
+    if subtitle_delta <= 0.0 or transcript_delta <= 0.0:
+        return 1e6
+
+    scale = transcript_delta / subtitle_delta
+    phrase_gap = max(current.phrase_index - previous.phrase_index - 1, 0)
+    cue_gap = max(current.subtitle_index - previous.subtitle_index - 1, 0)
+    cue_gap_ratio = cue_gap / max(cue_count - 1, 1)
+    phrase_gap_ratio = phrase_gap / max(phrase_count - 1, 1)
+    gap_penalty = abs(cue_gap_ratio - phrase_gap_ratio) * 2.4
+    compression_penalty = max(0.0, 0.60 - scale) * 4.0
+    expansion_penalty = max(0.0, scale - 1.60) * 1.8
+    jump_penalty = max(0.0, cue_gap - max(phrase_gap * 4, 6)) * 0.035
+    return gap_penalty + compression_penalty + expansion_penalty + jump_penalty
+
+
+def _heavy_skip_penalty(skipped_phrase_count: int) -> float:
+    if skipped_phrase_count <= 0:
+        return 0.0
+    return skipped_phrase_count * 0.22
+
+
+def _heavy_boundary_penalty(candidate: HeavyMatchCandidate, cue_count: int, phrase_count: int) -> float:
+    cue_ratio = candidate.subtitle_index / max(cue_count - 1, 1)
+    phrase_ratio = candidate.phrase_index / max(phrase_count - 1, 1)
+    return abs(cue_ratio - phrase_ratio) * 0.60
+
+
+def select_monotonic_heavy_alignment(
+    phrases: List[HeavyTranscriptPhrase],
+    cue_count: int,
+    candidate_lists: List[List[HeavyMatchCandidate]],
+) -> List[HeavyMatchCandidate]:
+    flattened = [candidate for candidates in candidate_lists for candidate in candidates]
+    if not flattened:
+        raise SubtitleSyncError('Heavy path alignment did not produce enough monotonic matches')
+
+    flattened.sort(key=lambda candidate: (candidate.phrase_index, candidate.subtitle_index, candidate.score))
+    phrase_count = len(phrases)
+    best_scores: List[float] = []
+    match_counts: List[int] = []
+    previous_indices: List[int] = []
+
+    for index, candidate in enumerate(flattened):
+        best_score = (
+            candidate.score
+            - _heavy_skip_penalty(candidate.phrase_index)
+            - _heavy_boundary_penalty(candidate, cue_count, phrase_count)
+        )
+        best_previous = -1
+        best_count = 1
+        for previous_index in range(index):
+            previous_candidate = flattened[previous_index]
+            if previous_candidate.phrase_index >= candidate.phrase_index:
+                continue
+            if previous_candidate.subtitle_index >= candidate.subtitle_index:
+                continue
+
+            skipped_phrases = candidate.phrase_index - previous_candidate.phrase_index - 1
+            transition_penalty = _heavy_transition_penalty(previous_candidate, candidate, cue_count, phrase_count)
+            chain_score = (
+                best_scores[previous_index]
+                + candidate.score
+                - transition_penalty
+                - _heavy_skip_penalty(skipped_phrases)
+            )
+            chain_count = match_counts[previous_index] + 1
+            if chain_score > best_score or (
+                abs(chain_score - best_score) < 1e-9 and chain_count > best_count
+            ):
+                best_score = chain_score
+                best_previous = previous_index
+                best_count = chain_count
+
+        best_scores.append(best_score)
+        match_counts.append(best_count)
+        previous_indices.append(best_previous)
+
+    def terminal_score(candidate_index: int) -> float:
+        trailing_skips = phrase_count - flattened[candidate_index].phrase_index - 1
+        return (
+            best_scores[candidate_index]
+            - _heavy_skip_penalty(trailing_skips)
+            - _heavy_boundary_penalty(flattened[candidate_index], cue_count, phrase_count)
+        )
+
+    best_terminal_index = max(
+        range(len(flattened)),
+        key=lambda index: (terminal_score(index), match_counts[index]),
+    )
+    selected: List[HeavyMatchCandidate] = []
+    cursor = best_terminal_index
+    while cursor >= 0:
+        selected.append(flattened[cursor])
+        cursor = previous_indices[cursor]
+    selected.reverse()
+
+    unique_selected: List[HeavyMatchCandidate] = []
+    last_phrase_index = -1
+    last_subtitle_index = -1
+    for candidate in selected:
+        if candidate.phrase_index <= last_phrase_index:
+            continue
+        if candidate.subtitle_index <= last_subtitle_index:
+            continue
+        unique_selected.append(candidate)
+        last_phrase_index = candidate.phrase_index
+        last_subtitle_index = candidate.subtitle_index
+
+    if len(unique_selected) < 4:
+        raise SubtitleSyncError('Heavy path alignment did not produce enough monotonic matches')
+    return unique_selected
+
+
+def thin_heavy_alignment_to_anchors(
+    matches: List[HeavyMatchCandidate],
+    cue_windows: List[SlidingCueWindow],
+    target_anchor_count: int = 10,
+    preserve_similarity: float = 0.80,
+    preserve_initial_count: int = 8,
+) -> List[AnchorMatch]:
+    if len(matches) < 2:
+        raise SubtitleSyncError('Heavy path needs at least two matches to create anchors')
+
+    ordered = sorted(matches, key=lambda match: match.subtitle_index)
+    preserved_matches: List[HeavyMatchCandidate] = []
+    preserved_pairs = set()
+
+    for index, match in enumerate(ordered):
+        should_preserve = index < preserve_initial_count or match.similarity >= preserve_similarity
+        if not should_preserve:
+            continue
+        pair = (match.phrase_index, match.subtitle_index)
+        if pair in preserved_pairs:
+            continue
+        preserved_matches.append(match)
+        preserved_pairs.add(pair)
+
+    if len(ordered) <= target_anchor_count:
+        chosen_matches = ordered
+    else:
+        stride = max(len(ordered) // max(target_anchor_count - 1, 1), 1)
+        chosen_matches = [ordered[0]]
+        chosen_matches.extend(ordered[index] for index in range(stride, len(ordered) - 1, stride))
+        chosen_matches.append(ordered[-1])
+
+    merged_matches: List[HeavyMatchCandidate] = []
+    seen_pairs = set()
+    for match in sorted(preserved_matches + chosen_matches, key=lambda item: item.subtitle_index):
+        pair = (match.phrase_index, match.subtitle_index)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        merged_matches.append(match)
+
+    cue_text_by_index = {
+        window.start_index: window.normalized_text
+        for window in cue_windows
+    }
+    anchors: List[AnchorMatch] = []
+    seen_subtitle_indices = set()
+    for index, match in enumerate(merged_matches, start=1):
+        if match.subtitle_index in seen_subtitle_indices:
+            continue
+        seen_subtitle_indices.add(match.subtitle_index)
+        anchors.append(
+            AnchorMatch(
+                window_name=f'heavy_{index}',
+                transcript_text=cue_text_by_index.get(match.subtitle_index, ''),
+                transcript_seconds=match.transcript_seconds,
+                subtitle_index=match.subtitle_index + 1,
+                subtitle_seconds=match.subtitle_seconds,
+                similarity=match.similarity,
+            )
+        )
+
+    if len(anchors) < 4:
+        raise SubtitleSyncError('Heavy path did not retain enough anchors after thinning')
+    return anchors
+
+
+def validate_heavy_anchor_stability(
+    anchors: List[AnchorMatch],
+    min_anchor_scale: float = 0.35,
+    max_anchor_scale: float = 2.50,
+) -> None:
+    ordered = sorted(anchors, key=lambda anchor: anchor.subtitle_seconds)
+    if len(ordered) < 2:
+        raise SubtitleSyncError('Heavy path needs at least two anchors for stability validation')
+
+    for left_anchor, right_anchor in zip(ordered, ordered[1:]):
+        subtitle_delta = right_anchor.subtitle_seconds - left_anchor.subtitle_seconds
+        transcript_delta = right_anchor.transcript_seconds - left_anchor.transcript_seconds
+        if subtitle_delta <= 0.0 or transcript_delta <= 0.0:
+            raise SubtitleSyncError('Heavy path anchors are not strictly increasing during stability validation')
+
+        scale = transcript_delta / subtitle_delta
+        if scale < min_anchor_scale or scale > max_anchor_scale:
+            raise SubtitleSyncError(
+                'Heavy path produced an unstable anchor segment '
+                f'between subtitle cues {left_anchor.subtitle_index} and {right_anchor.subtitle_index} '
+                f'(scale={scale:.3f})'
+            )
+
+
+def build_piecewise_segments(anchors: List[AnchorMatch]) -> List[PiecewiseSegment]:
+    ordered = sorted(anchors, key=lambda anchor: anchor.subtitle_seconds)
+    if len(ordered) < 2:
+        raise SubtitleSyncError('At least two anchors are required for piecewise sync')
+
+    segments = []
+    for left_anchor, right_anchor in zip(ordered, ordered[1:]):
+        subtitle_delta = right_anchor.subtitle_seconds - left_anchor.subtitle_seconds
+        transcript_delta = right_anchor.transcript_seconds - left_anchor.transcript_seconds
+        if subtitle_delta <= 0 or transcript_delta <= 0:
+            raise SubtitleSyncError('Heavy anchors are not strictly increasing')
+        scale = transcript_delta / subtitle_delta
+        offset = left_anchor.transcript_seconds - (left_anchor.subtitle_seconds * scale)
+        segments.append(
+            PiecewiseSegment(
+                start_subtitle_seconds=left_anchor.subtitle_seconds,
+                end_subtitle_seconds=right_anchor.subtitle_seconds,
+                offset_seconds=offset,
+                scale=scale,
+            )
+        )
+    return segments
+
+
+def build_global_baseline(anchors: List[AnchorMatch]) -> PiecewiseSegment:
+    ordered = sorted(anchors, key=lambda anchor: anchor.subtitle_seconds)
+    if len(ordered) < 2:
+        raise SubtitleSyncError('At least two anchors are required for a global baseline')
+
+    left_anchor = ordered[0]
+    right_anchor = ordered[-1]
+    subtitle_delta = right_anchor.subtitle_seconds - left_anchor.subtitle_seconds
+    transcript_delta = right_anchor.transcript_seconds - left_anchor.transcript_seconds
+    if subtitle_delta <= 0 or transcript_delta <= 0:
+        raise SubtitleSyncError('Global baseline anchors are not strictly increasing')
+
+    scale = transcript_delta / subtitle_delta
+    offset = left_anchor.transcript_seconds - (left_anchor.subtitle_seconds * scale)
+    return PiecewiseSegment(
+        start_subtitle_seconds=left_anchor.subtitle_seconds,
+        end_subtitle_seconds=right_anchor.subtitle_seconds,
+        offset_seconds=offset,
+        scale=scale,
+    )
+
+
+def transform_seconds(
+    seconds: float,
+    segments: List[PiecewiseSegment],
+    baseline: PiecewiseSegment,
+    enforce_baseline_guard: bool = False,
+) -> float:
+    chosen_segment = segments[0]
+    for segment in segments:
+        if seconds >= segment.start_subtitle_seconds:
+            chosen_segment = segment
+        if seconds <= segment.end_subtitle_seconds:
+            break
+
+    candidate = seconds * chosen_segment.scale + chosen_segment.offset_seconds
+    if not enforce_baseline_guard:
+        return candidate
+    baseline_value = seconds * baseline.scale + baseline.offset_seconds
+    if candidate < 0.0 or abs(chosen_segment.scale - baseline.scale) > 0.25:
+        return baseline_value
+    return candidate
+
+
+def apply_piecewise_transform(
+    subtitle_path: str,
+    output_path: str,
+    anchors: List[AnchorMatch],
+    enforce_baseline_guard: bool = False,
+) -> List[PiecewiseSegment]:
+    loaded = load_subtitles(subtitle_path)
+    subs = loaded.subs
+    segments = build_piecewise_segments(anchors)
+    baseline = build_global_baseline(anchors)
+
+    for line in subs:
+        start_seconds = _timems_to_seconds(line.start)
+        end_seconds = _timems_to_seconds(line.end)
+        new_start = transform_seconds(
+            start_seconds,
+            segments,
+            baseline,
+            enforce_baseline_guard=enforce_baseline_guard,
+        )
+        new_end = transform_seconds(
+            end_seconds,
+            segments,
+            baseline,
+            enforce_baseline_guard=enforce_baseline_guard,
+        )
+        line.start = _seconds_to_timems(new_start)
+        line.end = max(line.start, _seconds_to_timems(new_end))
+
+    subs.save(output_path, encoding=loaded.encoding)
+    return segments
+
+
+def heavy_plan_sync(
+    video_path: str,
+    subtitle_path: str,
+    chunk_minutes: int,
+    transcription_config: Optional[WhisperTranscriptionConfig] = None,
+    matching_config: Optional[SyncMatchingConfig] = None,
+) -> tuple[SyncPlan, List[AnchorMatch]]:
+    transcription_config = transcription_config or default_whisper_transcription_config()
+    matching_config = matching_config or default_sync_matching_config()
+
+    subtitle_language_alpha2, subtitle_language_alpha3 = parse_subtitle_language(subtitle_path)
+    metadata = probe_video_metadata(video_path)
+    audio_stream = select_audio_stream(metadata, subtitle_language_alpha3)
+    cues = load_normalized_cues(subtitle_path)
+    cue_windows = build_sliding_windows(cues, max_window_size=matching_config.anchor_max_window_size)
+    transcript_segments = build_full_transcript_segments(
+        video_path=video_path,
+        stream_index=audio_stream.index,
+        duration_seconds=metadata.duration_seconds,
+        language_alpha2=subtitle_language_alpha2,
+        transcription_config=transcription_config,
+        chunk_minutes=chunk_minutes,
+    )
+    phrases = build_heavy_transcript_phrases(
+        transcript_segments,
+        max_phrase_segments=matching_config.anchor_max_phrase_segments,
+        min_text_length=matching_config.anchor_min_text_length,
+    )
+    search_radius = max(len(cues) // 12, 70)
+    candidate_lists = [
+        build_heavy_match_candidates(
+            phrase,
+            cue_windows,
+            cue_count=len(cues),
+            phrase_count=len(phrases),
+            matching_config=matching_config,
+            search_radius=search_radius,
+        )
+        for phrase in phrases
+    ]
+    aligned_matches = select_monotonic_heavy_alignment(phrases, len(cues), candidate_lists)
+    anchors = thin_heavy_alignment_to_anchors(aligned_matches, cue_windows)
+    validate_heavy_anchor_stability(anchors)
+    baseline = build_global_baseline(anchors)
+    sample_windows = build_full_transcription_windows(metadata.duration_seconds, chunk_minutes)
+    plan = SyncPlan(
+        subtitle_language_alpha2=subtitle_language_alpha2,
+        subtitle_language_alpha3=subtitle_language_alpha3,
+        audio_stream_index=audio_stream.index,
+        sample_minutes=chunk_minutes,
+        sample_windows=sample_windows,
+        start_anchor=anchors[0],
+        end_anchor=anchors[-1],
+        offset_seconds=baseline.offset_seconds,
+        scale=baseline.scale,
+    )
+    return plan, anchors
+
+
+def heavy_sync_subtitle_file(
+    video_path: str,
+    subtitle_path: str,
+    chunk_minutes: int,
+    output_path: Optional[str] = None,
+    transcription_config: Optional[WhisperTranscriptionConfig] = None,
+    matching_config: Optional[SyncMatchingConfig] = None,
+) -> SyncResult:
+    logger.info(
+        'subtitle_sync: heavy sync start video=%s subtitle=%s chunk_minutes=%s output_override=%s',
+        video_path,
+        subtitle_path,
+        chunk_minutes,
+        output_path,
+    )
+    plan, anchors = heavy_plan_sync(
+        video_path=video_path,
+        subtitle_path=subtitle_path,
+        chunk_minutes=chunk_minutes,
+        transcription_config=transcription_config,
+        matching_config=matching_config,
+    )
+    resolved_output = output_path or build_output_path(subtitle_path)
+    apply_piecewise_transform(subtitle_path, resolved_output, anchors, enforce_baseline_guard=False)
+    logger.info('subtitle_sync: heavy sync complete output=%s', resolved_output)
+    return SyncResult(plan=plan, output_path=resolved_output)
+
+
 def sync_subtitle_file(
     video_path: str,
     subtitle_path: str,
@@ -796,28 +1407,12 @@ def sync_subtitle_file(
     audio_extractor: Callable[[str, int, AudioSampleWindow, str], str] = extract_audio_window,
     transcriber: Callable[[str, str, Optional[WhisperTranscriptionConfig]], List[TranscriptSegment]] = transcribe_audio,
 ) -> SyncResult:
-    logger.info(
-        'subtitle_sync: sync file start video=%s subtitle=%s sample_minutes=%s output_override=%s',
-        video_path,
-        subtitle_path,
-        sample_minutes,
-        output_path,
-    )
-    plan = plan_sync(
+    del metadata_provider, audio_extractor, transcriber
+    return heavy_sync_subtitle_file(
         video_path=video_path,
         subtitle_path=subtitle_path,
-        sample_minutes=sample_minutes,
+        chunk_minutes=sample_minutes,
+        output_path=output_path,
         transcription_config=transcription_config,
         matching_config=matching_config,
-        metadata_provider=metadata_provider,
-        audio_extractor=audio_extractor,
-        transcriber=transcriber,
     )
-    logger.info('subtitle_sync: sync plan complete subtitle=%s', subtitle_path)
-    resolved_output = output_path or build_output_path(subtitle_path)
-    logger.info('subtitle_sync: applying sync plan to output=%s', resolved_output)
-    started_at = time.perf_counter()
-    apply_transform_to_subtitles(subtitle_path, resolved_output, plan.offset_seconds, plan.scale)
-    logger.info('subtitle_sync: wrote synced subtitle file=%s in %.2fs', resolved_output, time.perf_counter() - started_at)
-    logger.info('subtitle_sync: sync file complete output=%s', resolved_output)
-    return SyncResult(plan=plan, output_path=resolved_output)

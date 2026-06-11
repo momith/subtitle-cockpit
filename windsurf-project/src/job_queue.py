@@ -35,7 +35,7 @@ JOB_TIMEOUTS = {
     JOB_TYPE_SUP_TO_SRT: 600,       # 10 minutes
     JOB_TYPE_TRANSLATE: 1800,       # 30 minutes
     JOB_TYPE_SEARCH_SUBTITLES: 600,  # 10 minutes
-    JOB_TYPE_SYNC_SUBTITLES: 1800,    # 30 minutes
+    JOB_TYPE_SYNC_SUBTITLES: 7200,    # 2 hours
     JOB_TYPE_PUBLISH_SUBTITLES: 600   # 10 minutes
 }
 
@@ -735,7 +735,7 @@ class JobQueue:
         with open(settings_file, 'r', encoding='utf-8') as f:
             settings = json.load(f)
 
-        sample_minutes = int(settings.get('sync_sample_minutes', 3) or 3)
+        sample_minutes = int(settings.get('sync_sample_minutes', 6) or 6)
         if sample_minutes < 1:
             sample_minutes = 1
 
@@ -745,19 +745,20 @@ class JobQueue:
             compute_type=str(settings.get('sync_whisper_compute_type', 'int8') or 'int8'),
             cpu_threads=max(int(settings.get('sync_whisper_cpu_threads', os.cpu_count() or 1) or (os.cpu_count() or 1)), 1),
             num_workers=max(int(settings.get('sync_whisper_num_workers', 1) or 1), 1),
-            beam_size=max(int(settings.get('sync_whisper_beam_size', 1) or 1), 1),
-            best_of=max(int(settings.get('sync_whisper_best_of', 1) or 1), 1),
+            beam_size=max(int(settings.get('sync_whisper_beam_size', 3) or 3), 1),
+            best_of=max(int(settings.get('sync_whisper_best_of', 3) or 3), 1),
             patience=max(float(settings.get('sync_whisper_patience', 1.0) or 1.0), 0.0),
             temperature=max(float(settings.get('sync_whisper_temperature', 0.0) or 0.0), 0.0),
             condition_on_previous_text=bool(settings.get('sync_whisper_condition_on_previous_text', False)),
             vad_filter=bool(settings.get('sync_whisper_vad_filter', True)),
+            word_timestamps=bool(settings.get('sync_whisper_word_timestamps', True)),
         )
         matching_config = SyncMatchingConfig(
-            anchor_min_similarity=max(float(settings.get('sync_anchor_min_similarity', 0.5) or 0.5), 0.0),
-            anchor_max_window_size=max(int(settings.get('sync_anchor_max_window_size', 8) or 8), 1),
-            anchor_max_candidates_from_edges=max(int(settings.get('sync_anchor_max_candidates_from_edges', 2) or 2), 1),
-            anchor_max_phrase_segments=max(int(settings.get('sync_anchor_max_phrase_segments', 4) or 4), 1),
-            anchor_min_text_length=max(int(settings.get('sync_anchor_min_text_length', 12) or 12), 1),
+            anchor_min_similarity=max(float(settings.get('sync_anchor_min_similarity', 0.38) or 0.38), 0.0),
+            anchor_max_window_size=max(int(settings.get('sync_anchor_max_window_size', 5) or 5), 1),
+            anchor_max_candidates_from_edges=max(int(settings.get('sync_anchor_max_candidates_from_edges', 8) or 8), 1),
+            anchor_max_phrase_segments=max(int(settings.get('sync_anchor_max_phrase_segments', 3) or 3), 1),
+            anchor_min_text_length=max(int(settings.get('sync_anchor_min_text_length', 18) or 18), 1),
             max_scale_delta=max(float(settings.get('sync_max_scale_delta', 0.08) or 0.08), 0.0),
             max_end_error_seconds=max(float(settings.get('sync_max_end_error_seconds', 1.0) or 1.0), 0.0),
         )

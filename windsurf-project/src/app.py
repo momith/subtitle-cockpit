@@ -243,23 +243,24 @@ def _default_settings():
         'excluded_file_types': '',
         'max_parallel_jobs': 1,
         'subtitle_max_downloads': 1,
-        'sync_sample_minutes': 3,
+        'sync_sample_minutes': 6,
         'sync_whisper_model': 'tiny',
         'sync_whisper_device': 'cpu',
         'sync_whisper_compute_type': 'int8',
         'sync_whisper_cpu_threads': max(os.cpu_count() or 1, 1),
         'sync_whisper_num_workers': 1,
-        'sync_whisper_beam_size': 1,
-        'sync_whisper_best_of': 1,
+        'sync_whisper_beam_size': 3,
+        'sync_whisper_best_of': 3,
         'sync_whisper_patience': 1.0,
         'sync_whisper_temperature': 0.0,
         'sync_whisper_condition_on_previous_text': False,
         'sync_whisper_vad_filter': True,
-        'sync_anchor_min_similarity': 0.5,
-        'sync_anchor_max_window_size': 8,
-        'sync_anchor_max_candidates_from_edges': 2,
-        'sync_anchor_max_phrase_segments': 4,
-        'sync_anchor_min_text_length': 12,
+        'sync_whisper_word_timestamps': True,
+        'sync_anchor_min_similarity': 0.38,
+        'sync_anchor_max_window_size': 5,
+        'sync_anchor_max_candidates_from_edges': 8,
+        'sync_anchor_max_phrase_segments': 3,
+        'sync_anchor_min_text_length': 18,
         'sync_max_scale_delta': 0.08,
         'sync_max_end_error_seconds': 1.0,
         'provider': 'DeepL',
@@ -455,18 +456,18 @@ def read_settings():
             excluded_file_types = str(data.get('excluded_file_types', base.get('excluded_file_types', '')))
             max_parallel_jobs = int(data.get('max_parallel_jobs', base.get('max_parallel_jobs', 1)))
             subtitle_max_downloads = int(data.get('subtitle_max_downloads', base.get('subtitle_max_downloads', 1)))
-            sync_sample_minutes = _parse_int_setting(data.get('sync_sample_minutes'), base.get('sync_sample_minutes', 3), 1, 15)
+            sync_sample_minutes = _parse_int_setting(data.get('sync_sample_minutes'), base.get('sync_sample_minutes', 6), 1, 30)
             sync_whisper_cpu_threads = _parse_int_setting(data.get('sync_whisper_cpu_threads'), base.get('sync_whisper_cpu_threads', 1), 1, 256)
             sync_whisper_num_workers = _parse_int_setting(data.get('sync_whisper_num_workers'), base.get('sync_whisper_num_workers', 1), 1, 32)
-            sync_whisper_beam_size = _parse_int_setting(data.get('sync_whisper_beam_size'), base.get('sync_whisper_beam_size', 1), 1, 16)
-            sync_whisper_best_of = _parse_int_setting(data.get('sync_whisper_best_of'), base.get('sync_whisper_best_of', 1), 1, 16)
+            sync_whisper_beam_size = _parse_int_setting(data.get('sync_whisper_beam_size'), base.get('sync_whisper_beam_size', 3), 1, 16)
+            sync_whisper_best_of = _parse_int_setting(data.get('sync_whisper_best_of'), base.get('sync_whisper_best_of', 3), 1, 16)
             sync_whisper_patience = _parse_float_setting(data.get('sync_whisper_patience'), base.get('sync_whisper_patience', 1.0), 0.0, 4.0)
             sync_whisper_temperature = _parse_float_setting(data.get('sync_whisper_temperature'), base.get('sync_whisper_temperature', 0.0), 0.0, 1.0)
-            sync_anchor_min_similarity = _parse_float_setting(data.get('sync_anchor_min_similarity'), base.get('sync_anchor_min_similarity', 0.5), 0.0, 1.0)
-            sync_anchor_max_window_size = _parse_int_setting(data.get('sync_anchor_max_window_size'), base.get('sync_anchor_max_window_size', 8), 1, 20)
-            sync_anchor_max_candidates_from_edges = _parse_int_setting(data.get('sync_anchor_max_candidates_from_edges'), base.get('sync_anchor_max_candidates_from_edges', 2), 1, 10)
-            sync_anchor_max_phrase_segments = _parse_int_setting(data.get('sync_anchor_max_phrase_segments'), base.get('sync_anchor_max_phrase_segments', 4), 1, 10)
-            sync_anchor_min_text_length = _parse_int_setting(data.get('sync_anchor_min_text_length'), base.get('sync_anchor_min_text_length', 12), 1, 200)
+            sync_anchor_min_similarity = _parse_float_setting(data.get('sync_anchor_min_similarity'), base.get('sync_anchor_min_similarity', 0.38), 0.0, 1.0)
+            sync_anchor_max_window_size = _parse_int_setting(data.get('sync_anchor_max_window_size'), base.get('sync_anchor_max_window_size', 5), 1, 20)
+            sync_anchor_max_candidates_from_edges = _parse_int_setting(data.get('sync_anchor_max_candidates_from_edges'), base.get('sync_anchor_max_candidates_from_edges', 8), 1, 16)
+            sync_anchor_max_phrase_segments = _parse_int_setting(data.get('sync_anchor_max_phrase_segments'), base.get('sync_anchor_max_phrase_segments', 3), 1, 10)
+            sync_anchor_min_text_length = _parse_int_setting(data.get('sync_anchor_min_text_length'), base.get('sync_anchor_min_text_length', 18), 1, 200)
             sync_max_scale_delta = _parse_float_setting(data.get('sync_max_scale_delta'), base.get('sync_max_scale_delta', 0.08), 0.0, 0.5)
             sync_max_end_error_seconds = _parse_float_setting(data.get('sync_max_end_error_seconds'), base.get('sync_max_end_error_seconds', 1.0), 0.0, 10.0)
             return {
@@ -487,6 +488,7 @@ def read_settings():
                 'sync_whisper_temperature': sync_whisper_temperature,
                 'sync_whisper_condition_on_previous_text': bool(data.get('sync_whisper_condition_on_previous_text', base.get('sync_whisper_condition_on_previous_text', False))),
                 'sync_whisper_vad_filter': bool(data.get('sync_whisper_vad_filter', base.get('sync_whisper_vad_filter', True))),
+                'sync_whisper_word_timestamps': bool(data.get('sync_whisper_word_timestamps', base.get('sync_whisper_word_timestamps', True))),
                 'sync_anchor_min_similarity': sync_anchor_min_similarity,
                 'sync_anchor_max_window_size': sync_anchor_max_window_size,
                 'sync_anchor_max_candidates_from_edges': sync_anchor_max_candidates_from_edges,
@@ -657,23 +659,24 @@ def api_settings():
     if subtitle_max_downloads < 1:
         subtitle_max_downloads = 1
 
-    sync_sample_minutes = _parse_int_setting(payload.get('sync_sample_minutes', existing.get('sync_sample_minutes', 3)), existing.get('sync_sample_minutes', 3), 1, 15)
+    sync_sample_minutes = _parse_int_setting(payload.get('sync_sample_minutes', existing.get('sync_sample_minutes', 6)), existing.get('sync_sample_minutes', 6), 1, 30)
     sync_whisper_model = str(payload.get('sync_whisper_model', existing.get('sync_whisper_model', 'tiny')) or 'tiny')
     sync_whisper_device = str(payload.get('sync_whisper_device', existing.get('sync_whisper_device', 'cpu')) or 'cpu')
     sync_whisper_compute_type = str(payload.get('sync_whisper_compute_type', existing.get('sync_whisper_compute_type', 'int8')) or 'int8')
     sync_whisper_cpu_threads = _parse_int_setting(payload.get('sync_whisper_cpu_threads', existing.get('sync_whisper_cpu_threads', max(os.cpu_count() or 1, 1))), existing.get('sync_whisper_cpu_threads', max(os.cpu_count() or 1, 1)), 1, 256)
     sync_whisper_num_workers = _parse_int_setting(payload.get('sync_whisper_num_workers', existing.get('sync_whisper_num_workers', 1)), existing.get('sync_whisper_num_workers', 1), 1, 32)
-    sync_whisper_beam_size = _parse_int_setting(payload.get('sync_whisper_beam_size', existing.get('sync_whisper_beam_size', 1)), existing.get('sync_whisper_beam_size', 1), 1, 16)
-    sync_whisper_best_of = _parse_int_setting(payload.get('sync_whisper_best_of', existing.get('sync_whisper_best_of', 1)), existing.get('sync_whisper_best_of', 1), 1, 16)
+    sync_whisper_beam_size = _parse_int_setting(payload.get('sync_whisper_beam_size', existing.get('sync_whisper_beam_size', 3)), existing.get('sync_whisper_beam_size', 3), 1, 16)
+    sync_whisper_best_of = _parse_int_setting(payload.get('sync_whisper_best_of', existing.get('sync_whisper_best_of', 3)), existing.get('sync_whisper_best_of', 3), 1, 16)
     sync_whisper_patience = _parse_float_setting(payload.get('sync_whisper_patience', existing.get('sync_whisper_patience', 1.0)), existing.get('sync_whisper_patience', 1.0), 0.0, 4.0)
     sync_whisper_temperature = _parse_float_setting(payload.get('sync_whisper_temperature', existing.get('sync_whisper_temperature', 0.0)), existing.get('sync_whisper_temperature', 0.0), 0.0, 1.0)
     sync_whisper_condition_on_previous_text = bool(payload.get('sync_whisper_condition_on_previous_text', existing.get('sync_whisper_condition_on_previous_text', False)))
     sync_whisper_vad_filter = bool(payload.get('sync_whisper_vad_filter', existing.get('sync_whisper_vad_filter', True)))
-    sync_anchor_min_similarity = _parse_float_setting(payload.get('sync_anchor_min_similarity', existing.get('sync_anchor_min_similarity', 0.5)), existing.get('sync_anchor_min_similarity', 0.5), 0.0, 1.0)
-    sync_anchor_max_window_size = _parse_int_setting(payload.get('sync_anchor_max_window_size', existing.get('sync_anchor_max_window_size', 8)), existing.get('sync_anchor_max_window_size', 8), 1, 20)
-    sync_anchor_max_candidates_from_edges = _parse_int_setting(payload.get('sync_anchor_max_candidates_from_edges', existing.get('sync_anchor_max_candidates_from_edges', 2)), existing.get('sync_anchor_max_candidates_from_edges', 2), 1, 10)
-    sync_anchor_max_phrase_segments = _parse_int_setting(payload.get('sync_anchor_max_phrase_segments', existing.get('sync_anchor_max_phrase_segments', 4)), existing.get('sync_anchor_max_phrase_segments', 4), 1, 10)
-    sync_anchor_min_text_length = _parse_int_setting(payload.get('sync_anchor_min_text_length', existing.get('sync_anchor_min_text_length', 12)), existing.get('sync_anchor_min_text_length', 12), 1, 200)
+    sync_whisper_word_timestamps = bool(payload.get('sync_whisper_word_timestamps', existing.get('sync_whisper_word_timestamps', True)))
+    sync_anchor_min_similarity = _parse_float_setting(payload.get('sync_anchor_min_similarity', existing.get('sync_anchor_min_similarity', 0.38)), existing.get('sync_anchor_min_similarity', 0.38), 0.0, 1.0)
+    sync_anchor_max_window_size = _parse_int_setting(payload.get('sync_anchor_max_window_size', existing.get('sync_anchor_max_window_size', 5)), existing.get('sync_anchor_max_window_size', 5), 1, 20)
+    sync_anchor_max_candidates_from_edges = _parse_int_setting(payload.get('sync_anchor_max_candidates_from_edges', existing.get('sync_anchor_max_candidates_from_edges', 8)), existing.get('sync_anchor_max_candidates_from_edges', 8), 1, 16)
+    sync_anchor_max_phrase_segments = _parse_int_setting(payload.get('sync_anchor_max_phrase_segments', existing.get('sync_anchor_max_phrase_segments', 3)), existing.get('sync_anchor_max_phrase_segments', 3), 1, 10)
+    sync_anchor_min_text_length = _parse_int_setting(payload.get('sync_anchor_min_text_length', existing.get('sync_anchor_min_text_length', 18)), existing.get('sync_anchor_min_text_length', 18), 1, 200)
     sync_max_scale_delta = _parse_float_setting(payload.get('sync_max_scale_delta', existing.get('sync_max_scale_delta', 0.08)), existing.get('sync_max_scale_delta', 0.08), 0.0, 0.5)
     sync_max_end_error_seconds = _parse_float_setting(payload.get('sync_max_end_error_seconds', existing.get('sync_max_end_error_seconds', 1.0)), existing.get('sync_max_end_error_seconds', 1.0), 0.0, 10.0)
 
@@ -695,6 +698,7 @@ def api_settings():
         'sync_whisper_temperature': sync_whisper_temperature,
         'sync_whisper_condition_on_previous_text': sync_whisper_condition_on_previous_text,
         'sync_whisper_vad_filter': sync_whisper_vad_filter,
+        'sync_whisper_word_timestamps': sync_whisper_word_timestamps,
         'sync_anchor_min_similarity': sync_anchor_min_similarity,
         'sync_anchor_max_window_size': sync_anchor_max_window_size,
         'sync_anchor_max_candidates_from_edges': sync_anchor_max_candidates_from_edges,

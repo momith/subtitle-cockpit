@@ -257,9 +257,9 @@
             <h4 style="margin-bottom: 12px;">Subtitle Sync</h4>
 
             <div class="row">
-                <label for="syncSampleMinutesInput">Analyze first and last N minutes</label>
-                <input id="syncSampleMinutesInput" type="number" min="1" max="15" step="1" value="3" />
-                <div class="small muted">Used for the faster-whisper sync pipeline on the selected audio track.</div>
+                <label for="syncSampleMinutesInput">Transcription chunk size in minutes</label>
+                <input id="syncSampleMinutesInput" type="number" min="1" max="30" step="1" value="6" />
+                <div class="small muted">Heavy sync transcribes the full audio timeline in chunks of this size on the selected audio track.</div>
             </div>
 
             <div class="row">
@@ -304,12 +304,12 @@
 
             <div class="row">
                 <label for="syncWhisperBeamSizeInput">Beam size</label>
-                <input id="syncWhisperBeamSizeInput" type="number" min="1" max="16" step="1" value="1" />
+                <input id="syncWhisperBeamSizeInput" type="number" min="1" max="16" step="1" value="3" />
             </div>
 
             <div class="row">
                 <label for="syncWhisperBestOfInput">Best of</label>
-                <input id="syncWhisperBestOfInput" type="number" min="1" max="16" step="1" value="1" />
+                <input id="syncWhisperBestOfInput" type="number" min="1" max="16" step="1" value="3" />
             </div>
 
             <div class="row">
@@ -332,39 +332,34 @@
                 <label for="syncWhisperVadFilter" style="margin:0; font-weight:500;">Enable whisper VAD filter</label>
             </div>
 
-            <div class="row">
-                <label for="syncAnchorMinSimilarityInput">Anchor minimum similarity</label>
-                <input id="syncAnchorMinSimilarityInput" type="number" min="0" max="1" step="0.01" value="0.5" />
+            <div class="row inline">
+                <input type="checkbox" id="syncWhisperWordTimestamps" checked />
+                <label for="syncWhisperWordTimestamps" style="margin:0; font-weight:500;">Use word timestamps for heavy sync timing</label>
             </div>
 
             <div class="row">
-                <label for="syncAnchorMaxWindowSizeInput">Subtitle window size</label>
-                <input id="syncAnchorMaxWindowSizeInput" type="number" min="1" max="20" step="1" value="8" />
+                <label for="syncAnchorMinSimilarityInput">Candidate minimum similarity</label>
+                <input id="syncAnchorMinSimilarityInput" type="number" min="0" max="1" step="0.01" value="0.38" />
             </div>
 
             <div class="row">
-                <label for="syncAnchorMaxCandidatesFromEdgesInput">Anchor edge candidates</label>
-                <input id="syncAnchorMaxCandidatesFromEdgesInput" type="number" min="1" max="10" step="1" value="2" />
+                <label for="syncAnchorMaxWindowSizeInput">Subtitle phrase window size</label>
+                <input id="syncAnchorMaxWindowSizeInput" type="number" min="1" max="20" step="1" value="5" />
             </div>
 
             <div class="row">
-                <label for="syncAnchorMaxPhraseSegmentsInput">Anchor phrase segments</label>
-                <input id="syncAnchorMaxPhraseSegmentsInput" type="number" min="1" max="10" step="1" value="4" />
+                <label for="syncAnchorMaxCandidatesFromEdgesInput">Candidates kept per transcript phrase</label>
+                <input id="syncAnchorMaxCandidatesFromEdgesInput" type="number" min="1" max="16" step="1" value="8" />
             </div>
 
             <div class="row">
-                <label for="syncAnchorMinTextLengthInput">Anchor minimum text length</label>
-                <input id="syncAnchorMinTextLengthInput" type="number" min="1" max="200" step="1" value="12" />
+                <label for="syncAnchorMaxPhraseSegmentsInput">Transcript segments per phrase</label>
+                <input id="syncAnchorMaxPhraseSegmentsInput" type="number" min="1" max="10" step="1" value="3" />
             </div>
 
             <div class="row">
-                <label for="syncMaxScaleDeltaInput">Maximum scale delta</label>
-                <input id="syncMaxScaleDeltaInput" type="number" min="0" max="0.5" step="0.01" value="0.08" />
-            </div>
-
-            <div class="row">
-                <label for="syncMaxEndErrorSecondsInput">Maximum end error in seconds</label>
-                <input id="syncMaxEndErrorSecondsInput" type="number" min="0" max="10" step="0.1" value="1.0" />
+                <label for="syncAnchorMinTextLengthInput">Transcript phrase minimum text length</label>
+                <input id="syncAnchorMinTextLengthInput" type="number" min="1" max="200" step="1" value="18" />
             </div>
 
             <div class="actions">
