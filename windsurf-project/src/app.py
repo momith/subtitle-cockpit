@@ -126,6 +126,8 @@ def init_job_queue():
     settings = read_settings()
     max_parallel = settings.get('max_parallel_jobs', 1)
     job_queue = get_job_queue(max_parallel=max_parallel)
+    cleared_jobs = job_queue.clear_jobs()
+    logging.info(f'Job queue reset on startup, removed {cleared_jobs} persisted job(s)')
     return job_queue
 
 @app.route('/')

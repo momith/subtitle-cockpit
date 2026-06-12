@@ -227,6 +227,17 @@ class JobQueue:
         if deleted > 0:
             logging.info(f'Cleaned up {deleted} old jobs')
         return deleted
+
+    def clear_jobs(self) -> int:
+        """Delete all persisted jobs from the queue database."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM jobs')
+        deleted = cursor.rowcount
+        conn.commit()
+        conn.close()
+        logging.info(f'Cleared {deleted} job(s) from queue database')
+        return deleted
     
     def start_processor(self):
         """Start the background job processor"""

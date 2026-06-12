@@ -829,6 +829,7 @@ class HeavyMatchCandidate:
     phrase_index: int
     transcript_seconds: float
     subtitle_index: int
+    subtitle_end_index: int
     subtitle_seconds: float
     similarity: float
     score: float
@@ -979,6 +980,7 @@ def build_heavy_match_candidates(
                 phrase_index=phrase.phrase_index,
                 transcript_seconds=phrase.transcript_seconds,
                 subtitle_index=window.start_index,
+                subtitle_end_index=window.end_index,
                 subtitle_seconds=window.start_seconds,
                 similarity=similarity,
                 score=score,
@@ -989,6 +991,7 @@ def build_heavy_match_candidates(
         key=lambda candidate: (
             candidate.score,
             candidate.similarity,
+            candidate.subtitle_end_index,
             -abs(candidate.subtitle_index - expected_index),
         ),
         reverse=True,
@@ -1009,7 +1012,7 @@ def _heavy_transition_penalty(
 
     scale = transcript_delta / subtitle_delta
     phrase_gap = max(current.phrase_index - previous.phrase_index - 1, 0)
-    cue_gap = max(current.subtitle_index - previous.subtitle_index - 1, 0)
+    cue_gap = max(current.subtitle_index - previous.subtitle_end_index - 1, 0)
     cue_gap_ratio = cue_gap / max(cue_count - 1, 1)
     phrase_gap_ratio = phrase_gap / max(phrase_count - 1, 1)
     gap_penalty = abs(cue_gap_ratio - phrase_gap_ratio) * 2.4
@@ -1040,7 +1043,14 @@ def select_monotonic_heavy_alignment(
     if not flattened:
         raise SubtitleSyncError('Heavy path alignment did not produce enough monotonic matches')
 
-    flattened.sort(key=lambda candidate: (candidate.phrase_index, candidate.subtitle_index, candidate.score))
+    flattened.sort(
+        key=lambda candidate: (
+            candidate.phrase_index,
+            candidate.subtitle_index,
+            candidate.subtitle_end_index,
+            candidate.score,
+        )
+    )
     phrase_count = len(phrases)
     best_scores: List[float] = []
     match_counts: List[int] = []
@@ -1058,7 +1068,7 @@ def select_monotonic_heavy_alignment(
             previous_candidate = flattened[previous_index]
             if previous_candidate.phrase_index >= candidate.phrase_index:
                 continue
-            if previous_candidate.subtitle_index >= candidate.subtitle_index:
+            if previous_candidate.subtitle_end_index >= candidate.subtitle_index:
                 continue
 
             skipped_phrases = candidate.phrase_index - previous_candidate.phrase_index - 1
@@ -1103,14 +1113,18 @@ def select_monotonic_heavy_alignment(
     unique_selected: List[HeavyMatchCandidate] = []
     last_phrase_index = -1
     last_subtitle_index = -1
+    last_subtitle_end_index = -1
     for candidate in selected:
         if candidate.phrase_index <= last_phrase_index:
             continue
-        if candidate.subtitle_index <= last_subtitle_index:
+        if candidate.subtitle_index <= last_subtitle_index and candidate.subtitle_end_index <= last_subtitle_end_index:
+            continue
+        if candidate.subtitle_index <= last_subtitle_end_index:
             continue
         unique_selected.append(candidate)
         last_phrase_index = candidate.phrase_index
         last_subtitle_index = candidate.subtitle_index
+        last_subtitle_end_index = candidate.subtitle_end_index
 
     if len(unique_selected) < 4:
         raise SubtitleSyncError('Heavy path alignment did not produce enough monotonic matches')
@@ -1135,7 +1149,7 @@ def thin_heavy_alignment_to_anchors(
         should_preserve = index < preserve_initial_count or match.similarity >= preserve_similarity
         if not should_preserve:
             continue
-        pair = (match.phrase_index, match.subtitle_index)
+        pair = (match.phrase_index, match.subtitle_index, match.subtitle_end_index)
         if pair in preserved_pairs:
             continue
         preserved_matches.append(match)
@@ -1152,26 +1166,27 @@ def thin_heavy_alignment_to_anchors(
     merged_matches: List[HeavyMatchCandidate] = []
     seen_pairs = set()
     for match in sorted(preserved_matches + chosen_matches, key=lambda item: item.subtitle_index):
-        pair = (match.phrase_index, match.subtitle_index)
+        pair = (match.phrase_index, match.subtitle_index, match.subtitle_end_index)
         if pair in seen_pairs:
             continue
         seen_pairs.add(pair)
         merged_matches.append(match)
 
-    cue_text_by_index = {
-        window.start_index: window.normalized_text
+    cue_text_by_range = {
+        (window.start_index, window.end_index): window.normalized_text
         for window in cue_windows
     }
     anchors: List[AnchorMatch] = []
-    seen_subtitle_indices = set()
+    seen_subtitle_ranges = set()
     for index, match in enumerate(merged_matches, start=1):
-        if match.subtitle_index in seen_subtitle_indices:
+        subtitle_range = (match.subtitle_index, match.subtitle_end_index)
+        if subtitle_range in seen_subtitle_ranges:
             continue
-        seen_subtitle_indices.add(match.subtitle_index)
+        seen_subtitle_ranges.add(subtitle_range)
         anchors.append(
             AnchorMatch(
                 window_name=f'heavy_{index}',
-                transcript_text=cue_text_by_index.get(match.subtitle_index, ''),
+                transcript_text=cue_text_by_range.get(subtitle_range, ''),
                 transcript_seconds=match.transcript_seconds,
                 subtitle_index=match.subtitle_index + 1,
                 subtitle_seconds=match.subtitle_seconds,
