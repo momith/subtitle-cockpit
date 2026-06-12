@@ -999,6 +999,114 @@ def build_heavy_match_candidates(
     return candidates[:max(matching_config.anchor_max_candidates_from_edges, 1)]
 
 
+def _heavy_phrase_token_count(phrase: HeavyTranscriptPhrase) -> int:
+    return len([token for token in phrase.normalized_text.split() if token])
+
+
+def _should_locally_rerank_heavy_phrase(
+    phrase: HeavyTranscriptPhrase,
+    candidates: List[HeavyMatchCandidate],
+    strong_similarity: float,
+) -> bool:
+    token_count = _heavy_phrase_token_count(phrase)
+    if token_count <= 3:
+        return True
+    if len(phrase.normalized_text) <= 24:
+        return True
+    if not candidates:
+        return False
+    return candidates[0].similarity < strong_similarity
+
+
+def rerank_heavy_candidates_locally(
+    phrases: List[HeavyTranscriptPhrase],
+    cue_count: int,
+    candidate_lists: List[List[HeavyMatchCandidate]],
+    local_radius: int = 18,
+    proximity_weight: float = 0.18,
+    strong_similarity: float = 0.72,
+) -> List[List[HeavyMatchCandidate]]:
+    if not phrases or not candidate_lists:
+        return candidate_lists
+
+    try:
+        initial_alignment = select_monotonic_heavy_alignment(phrases, cue_count, candidate_lists)
+    except SubtitleSyncError:
+        return candidate_lists
+
+    strong_matches = {
+        match.phrase_index: match
+        for match in initial_alignment
+        if match.similarity >= strong_similarity
+    }
+    if not strong_matches:
+        return candidate_lists
+
+    reranked_lists: List[List[HeavyMatchCandidate]] = []
+    reranked_phrase_count = 0
+    for phrase, candidates in zip(phrases, candidate_lists):
+        if not candidates or not _should_locally_rerank_heavy_phrase(phrase, candidates, strong_similarity):
+            reranked_lists.append(candidates)
+            continue
+
+        neighbor_matches = []
+        previous_match = strong_matches.get(phrase.phrase_index - 1)
+        next_match = strong_matches.get(phrase.phrase_index + 1)
+        if previous_match is not None:
+            neighbor_matches.append(previous_match)
+        if next_match is not None:
+            neighbor_matches.append(next_match)
+        if not neighbor_matches:
+            reranked_lists.append(candidates)
+            continue
+
+        boosted_candidates: List[HeavyMatchCandidate] = []
+        for candidate in candidates:
+            best_local_bonus = 0.0
+            for neighbor_match in neighbor_matches:
+                distance = abs(candidate.subtitle_index - neighbor_match.subtitle_index)
+                if distance > local_radius:
+                    continue
+                proximity_bonus = (1.0 - (distance / max(local_radius, 1))) * proximity_weight
+                if proximity_bonus > best_local_bonus:
+                    best_local_bonus = proximity_bonus
+            boosted_candidates.append(
+                HeavyMatchCandidate(
+                    phrase_index=candidate.phrase_index,
+                    transcript_seconds=candidate.transcript_seconds,
+                    subtitle_index=candidate.subtitle_index,
+                    subtitle_end_index=candidate.subtitle_end_index,
+                    subtitle_seconds=candidate.subtitle_seconds,
+                    similarity=candidate.similarity,
+                    score=candidate.score + best_local_bonus,
+                )
+            )
+
+        boosted_candidates.sort(
+            key=lambda candidate: (
+                candidate.score,
+                candidate.similarity,
+                candidate.subtitle_end_index,
+                candidate.subtitle_index,
+            ),
+            reverse=True,
+        )
+        reranked_lists.append(boosted_candidates)
+        reranked_phrase_count += 1
+
+    if reranked_phrase_count > 0:
+        logger.info(
+            'subtitle_sync: locally reranked heavy candidates phrases=%s strong_matches=%s radius=%s weight=%.2f threshold=%.2f',
+            reranked_phrase_count,
+            len(strong_matches),
+            local_radius,
+            proximity_weight,
+            strong_similarity,
+        )
+
+    return reranked_lists
+
+
 def _heavy_transition_penalty(
     previous: HeavyMatchCandidate,
     current: HeavyMatchCandidate,
@@ -1364,6 +1472,11 @@ def heavy_plan_sync(
         )
         for phrase in phrases
     ]
+    candidate_lists = rerank_heavy_candidates_locally(
+        phrases,
+        len(cues),
+        candidate_lists,
+    )
     aligned_matches = select_monotonic_heavy_alignment(phrases, len(cues), candidate_lists)
     anchors = thin_heavy_alignment_to_anchors(aligned_matches, cue_windows)
     validate_heavy_anchor_stability(anchors)
