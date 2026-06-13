@@ -22,3 +22,5 @@ pyasstosrt
 subliminal
 ffsubsync
 faster-whisper
+rapidfuzz
+sentence-transformers

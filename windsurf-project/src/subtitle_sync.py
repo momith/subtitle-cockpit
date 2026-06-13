@@ -15,6 +15,11 @@ from typing import Callable, Iterable, List, Optional
 import pysubs2
 from babelfish import Language
 
+try:
+    from rapidfuzz import fuzz as rapidfuzz_fuzz
+except ImportError:
+    rapidfuzz_fuzz = None
+
 
 VIDEO_EXTENSIONS = {
     '.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
@@ -44,6 +49,10 @@ ISO639_B_TO_T = {
 }
 
 logger = logging.getLogger(__name__)
+
+_HEAVY_EMBEDDING_MODEL = None
+_HEAVY_EMBEDDING_MODEL_LOAD_FAILED = False
+_HEAVY_EMBEDDING_MODEL_NAME = None
 
 
 class SubtitleSyncError(RuntimeError):
@@ -172,6 +181,14 @@ class SyncMatchingConfig:
     max_end_error_seconds: float = 1.0
 
 
+@dataclass(frozen=True)
+class HeavySyncConfig:
+    embedding_model_name: str = 'intfloat/multilingual-e5-small'
+    max_cue_gap_seconds: float = 3.5
+    max_transcript_gap_seconds: float = 3.5
+    step_segments: int = 1
+
+
 def default_whisper_transcription_config() -> WhisperTranscriptionConfig:
     return WhisperTranscriptionConfig(
         model_name=os.environ.get('SUBTITLE_SYNC_WHISPER_MODEL', 'tiny'),
@@ -191,6 +208,15 @@ def default_whisper_transcription_config() -> WhisperTranscriptionConfig:
 
 def default_sync_matching_config() -> SyncMatchingConfig:
     return SyncMatchingConfig()
+
+
+def default_heavy_sync_config() -> HeavySyncConfig:
+    return HeavySyncConfig(
+        embedding_model_name=str(os.environ.get('SUBTITLE_SYNC_HEAVY_EMBEDDING_MODEL', 'intfloat/multilingual-e5-small') or 'intfloat/multilingual-e5-small'),
+        max_cue_gap_seconds=max(float(os.environ.get('SUBTITLE_SYNC_HEAVY_MAX_CUE_GAP_SECONDS', '3.5')), 0.0),
+        max_transcript_gap_seconds=max(float(os.environ.get('SUBTITLE_SYNC_HEAVY_MAX_TRANSCRIPT_GAP_SECONDS', '3.5')), 0.0),
+        step_segments=max(int(os.environ.get('SUBTITLE_SYNC_HEAVY_STEP_SEGMENTS', '1')), 1),
+    )
 
 
 def normalize_text(value: str) -> str:
@@ -327,11 +353,19 @@ def load_normalized_cues(subtitle_path: str) -> List[NormalizedCue]:
     return cues
 
 
-def build_sliding_windows(cues: List[NormalizedCue], max_window_size: int = 8) -> List[SlidingCueWindow]:
+def build_sliding_windows(
+    cues: List[NormalizedCue],
+    max_window_size: int = 8,
+    max_gap_seconds: float | None = None,
+) -> List[SlidingCueWindow]:
     windows: List[SlidingCueWindow] = []
     for start in range(len(cues)):
         parts: List[str] = []
         for end in range(start, min(len(cues), start + max_window_size)):
+            if max_gap_seconds is not None and end > start:
+                gap_seconds = cues[end].start_seconds - cues[end - 1].end_seconds
+                if gap_seconds > max_gap_seconds:
+                    break
             parts.append(cues[end].normalized_text)
             text = normalize_text(' '.join(parts))
             if not text:
@@ -379,6 +413,10 @@ def _similarity(left: str, right: str) -> float:
     from difflib import SequenceMatcher
 
     return SequenceMatcher(None, left, right).ratio()
+
+
+def _collapse_whitespace(value: str) -> str:
+    return re.sub(r'\s+', ' ', (value or '').replace('\\N', ' ').replace('\n', ' ')).strip()
 
 
 def find_anchor_match(
@@ -821,6 +859,7 @@ def plan_sync(
 class HeavyTranscriptPhrase:
     phrase_index: int
     transcript_seconds: float
+    raw_text: str
     normalized_text: str
 
 
@@ -833,6 +872,16 @@ class HeavyMatchCandidate:
     subtitle_seconds: float
     similarity: float
     score: float
+    source: str = 'local'
+    llm_similarity: float | None = None
+
+
+@dataclass(frozen=True)
+class VoiceActivitySegment:
+    start_seconds: float
+    end_seconds: float
+    text: str
+    no_speech_prob: float | None
 
 
 def build_full_transcript_segments(
@@ -841,10 +890,11 @@ def build_full_transcript_segments(
     duration_seconds: float,
     language_alpha2: str,
     transcription_config: WhisperTranscriptionConfig,
-    chunk_minutes: int,
-) -> List[TranscriptSegment]:
+    chunk_minutes: int = 6,
+) -> tuple[List[TranscriptSegment], List[VoiceActivitySegment]]:
     chunk_seconds = max(float(chunk_minutes) * 60.0, 60.0)
     segments: List[TranscriptSegment] = []
+    voice_segments: List[VoiceActivitySegment] = []
     model = _get_whisper_model(
         transcription_config.model_name,
         transcription_config.device,
@@ -891,11 +941,25 @@ def build_full_transcript_segments(
                     relative_start = float(getattr(timed_words[0], 'start', relative_start))
                     relative_end = float(getattr(timed_words[-1], 'end', relative_end))
 
+                absolute_start = relative_start + chunk_start
+                absolute_end = relative_end + chunk_start
+                no_speech_prob = getattr(whisper_segment, 'no_speech_prob', None)
+                if no_speech_prob is not None:
+                    no_speech_prob = float(no_speech_prob)
+
                 segments.append(
                     TranscriptSegment(
                         text=text,
-                        start_seconds=relative_start + chunk_start,
-                        end_seconds=relative_end + chunk_start,
+                        start_seconds=absolute_start,
+                        end_seconds=absolute_end,
+                    )
+                )
+                voice_segments.append(
+                    VoiceActivitySegment(
+                        start_seconds=absolute_start,
+                        end_seconds=absolute_end,
+                        text=text,
+                        no_speech_prob=no_speech_prob,
                     )
                 )
 
@@ -904,27 +968,34 @@ def build_full_transcript_segments(
 
     if not segments:
         raise SubtitleSyncError('Heavy path did not produce any transcript segments')
-    return segments
+    return segments, voice_segments
 
 
 def build_heavy_transcript_phrases(
     transcript_segments: List[TranscriptSegment],
-    step_segments: int = 4,
+    step_segments: int = 1,
     max_phrase_segments: int = 3,
     min_text_length: int = 18,
+    max_gap_seconds: float | None = None,
 ) -> List[HeavyTranscriptPhrase]:
     phrases: List[HeavyTranscriptPhrase] = []
     for start_index in range(0, len(transcript_segments), max(step_segments, 1)):
         parts: List[str] = []
         for end_index in range(start_index, min(len(transcript_segments), start_index + max_phrase_segments)):
+            if end_index > start_index and max_gap_seconds is not None:
+                gap_seconds = transcript_segments[end_index].start_seconds - transcript_segments[end_index - 1].end_seconds
+                if gap_seconds > max_gap_seconds:
+                    break
             parts.append(transcript_segments[end_index].text)
-            normalized = normalize_text(' '.join(parts))
+            raw_text = _collapse_whitespace(' '.join(parts))
+            normalized = normalize_text(raw_text)
             if len(normalized) < min_text_length:
                 continue
             phrases.append(
                 HeavyTranscriptPhrase(
                     phrase_index=len(phrases),
                     transcript_seconds=transcript_segments[start_index].start_seconds,
+                    raw_text=raw_text,
                     normalized_text=normalized,
                 )
             )
@@ -935,21 +1006,162 @@ def build_heavy_transcript_phrases(
     return phrases
 
 
-def compute_heavy_text_similarity(phrase_text: str, subtitle_text: str) -> float:
+def compute_heavy_text_similarity(
+    phrase_text: str,
+    subtitle_text: str,
+    heavy_config: Optional[HeavySyncConfig] = None,
+) -> float:
     phrase_tokens = [token for token in phrase_text.split() if token]
     subtitle_tokens = [token for token in subtitle_text.split() if token]
     if not phrase_tokens or not subtitle_tokens:
         return 0.0
 
-    phrase_set = set(phrase_tokens)
-    subtitle_set = set(subtitle_tokens)
-    overlap = len(phrase_set & subtitle_set)
-    max_token_count = max(len(phrase_set), len(subtitle_set), 1)
-    token_overlap = overlap / max_token_count
+    heavy_config = heavy_config or default_heavy_sync_config()
+    embedding_similarity = _compute_embedding_similarity(
+        phrase_text,
+        subtitle_text,
+        heavy_config.embedding_model_name,
+    )
+    fuzzy_similarity = _compute_fuzzy_similarity(phrase_text, subtitle_text)
+    phonetic_similarity = _compute_phonetic_similarity(phrase_tokens, subtitle_tokens)
+    return max(0.0, min((0.45 * embedding_similarity) + (0.20 * fuzzy_similarity) + (0.35 * phonetic_similarity), 1.0))
 
-    sequence_ratio = _similarity(phrase_text, subtitle_text)
-    token_ratio = _similarity(' '.join(sorted(phrase_set)), ' '.join(sorted(subtitle_set)))
-    return max(sequence_ratio, (token_overlap * 0.55) + (token_ratio * 0.45))
+
+def _get_heavy_embedding_model(model_name: str):
+    global _HEAVY_EMBEDDING_MODEL, _HEAVY_EMBEDDING_MODEL_LOAD_FAILED, _HEAVY_EMBEDDING_MODEL_NAME
+
+    if _HEAVY_EMBEDDING_MODEL is not None and _HEAVY_EMBEDDING_MODEL_NAME == model_name:
+        return _HEAVY_EMBEDDING_MODEL
+    if _HEAVY_EMBEDDING_MODEL_NAME != model_name:
+        _HEAVY_EMBEDDING_MODEL = None
+        _HEAVY_EMBEDDING_MODEL_LOAD_FAILED = False
+        _HEAVY_EMBEDDING_MODEL_NAME = model_name
+    if _HEAVY_EMBEDDING_MODEL_LOAD_FAILED:
+        return None
+
+    try:
+        from sentence_transformers import SentenceTransformer
+
+        _HEAVY_EMBEDDING_MODEL = SentenceTransformer(model_name)
+    except Exception:
+        _HEAVY_EMBEDDING_MODEL_LOAD_FAILED = True
+        return None
+    return _HEAVY_EMBEDDING_MODEL
+
+
+@lru_cache(maxsize=8192)
+def _encode_heavy_text(model_name: str, role: str, text: str) -> tuple[float, ...] | None:
+    model = _get_heavy_embedding_model(model_name)
+    if model is None:
+        return None
+
+    vector = model.encode(
+        f'{role}: {text}',
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+    return tuple(float(value) for value in vector)
+
+
+def _compute_embedding_similarity(phrase_text: str, subtitle_text: str, model_name: str) -> float:
+    phrase_vector = _encode_heavy_text(model_name, 'query', phrase_text)
+    subtitle_vector = _encode_heavy_text(model_name, 'passage', subtitle_text)
+    if phrase_vector is None or subtitle_vector is None:
+        return _similarity(phrase_text, subtitle_text)
+
+    return max(0.0, min(sum(left * right for left, right in zip(phrase_vector, subtitle_vector)), 1.0))
+
+
+def _compute_fuzzy_similarity(phrase_text: str, subtitle_text: str) -> float:
+    if rapidfuzz_fuzz is None:
+        return _similarity(phrase_text, subtitle_text)
+
+    ratio = rapidfuzz_fuzz.ratio(phrase_text, subtitle_text) / 100.0
+    partial_ratio = rapidfuzz_fuzz.partial_ratio(phrase_text, subtitle_text) / 100.0
+    token_set_ratio = rapidfuzz_fuzz.token_set_ratio(phrase_text, subtitle_text) / 100.0
+    return max(ratio, (token_set_ratio * 0.65) + (partial_ratio * 0.35))
+
+
+def _compute_phonetic_similarity(phrase_tokens: List[str], subtitle_tokens: List[str]) -> float:
+    phrase_codes = [code for code in (_cologne_phonetics(token) for token in phrase_tokens) if code]
+    subtitle_codes = [code for code in (_cologne_phonetics(token) for token in subtitle_tokens) if code]
+    if not phrase_codes or not subtitle_codes:
+        return 0.0
+
+    phrase_code_text = ' '.join(phrase_codes)
+    subtitle_code_text = ' '.join(subtitle_codes)
+    sequence_ratio = _similarity(phrase_code_text, subtitle_code_text)
+    phrase_set = set(phrase_codes)
+    subtitle_set = set(subtitle_codes)
+    overlap_ratio = len(phrase_set & subtitle_set) / max(len(phrase_set), len(subtitle_set), 1)
+    return max(sequence_ratio, overlap_ratio)
+
+
+def _cologne_phonetics(text: str) -> str:
+    normalized = (
+        text.upper()
+        .replace('Ä', 'A')
+        .replace('Ö', 'O')
+        .replace('Ü', 'U')
+        .replace('ß', 'SS')
+    )
+    letters = [char for char in normalized if 'A' <= char <= 'Z']
+    if not letters:
+        return ''
+
+    codes: List[str] = []
+    previous_code = ''
+    for index, char in enumerate(letters):
+        previous_char = letters[index - 1] if index > 0 else ''
+        next_char = letters[index + 1] if index + 1 < len(letters) else ''
+        code = _cologne_code_for_char(char, previous_char, next_char, index == 0)
+        if not code:
+            continue
+        for digit in code:
+            if digit == previous_code:
+                continue
+            codes.append(digit)
+            previous_code = digit
+
+    if not codes:
+        return ''
+    head = codes[0]
+    tail = [digit for digit in codes[1:] if digit != '0']
+    return ''.join([head] + tail)
+
+
+def _cologne_code_for_char(char: str, previous_char: str, next_char: str, is_start: bool) -> str:
+    if char in 'AEIJOUY':
+        return '0'
+    if char == 'H':
+        return ''
+    if char == 'B':
+        return '1'
+    if char == 'P':
+        return '3' if next_char == 'H' else '1'
+    if char in 'DT':
+        return '8' if next_char in 'CSZ' else '2'
+    if char in 'FVW':
+        return '3'
+    if char in 'GKQ':
+        return '4'
+    if char == 'X':
+        return '8' if previous_char in 'CKQ' else '48'
+    if char == 'L':
+        return '5'
+    if char in 'MN':
+        return '6'
+    if char == 'R':
+        return '7'
+    if char in 'SZ':
+        return '8'
+    if char == 'C':
+        if is_start:
+            return '4' if next_char in 'AHKLOQRUX' else '8'
+        if previous_char in 'SZ' or next_char in 'AHKOQUX':
+            return '4'
+        return '8'
+    return ''
 
 
 def build_heavy_match_candidates(
@@ -959,6 +1171,7 @@ def build_heavy_match_candidates(
     phrase_count: int,
     matching_config: SyncMatchingConfig,
     search_radius: int,
+    heavy_config: Optional[HeavySyncConfig] = None,
 ) -> List[HeavyMatchCandidate]:
     cue_denominator = max(cue_count - 1, 1)
     phrase_denominator = max(phrase_count - 1, 1)
@@ -970,7 +1183,11 @@ def build_heavy_match_candidates(
     for window in cue_windows:
         if window.start_index < lower_bound or window.end_index > upper_bound:
             continue
-        similarity = compute_heavy_text_similarity(phrase.normalized_text, window.normalized_text)
+        similarity = compute_heavy_text_similarity(
+            phrase.normalized_text,
+            window.normalized_text,
+            heavy_config=heavy_config,
+        )
         if similarity < matching_config.anchor_min_similarity:
             continue
         positional_penalty = abs(window.start_index - expected_index) / max(search_radius, 1)
@@ -984,6 +1201,7 @@ def build_heavy_match_candidates(
                 subtitle_seconds=window.start_seconds,
                 similarity=similarity,
                 score=score,
+                source='local',
             )
         )
 
@@ -1123,10 +1341,19 @@ def _heavy_transition_penalty(
     cue_gap = max(current.subtitle_index - previous.subtitle_end_index - 1, 0)
     cue_gap_ratio = cue_gap / max(cue_count - 1, 1)
     phrase_gap_ratio = phrase_gap / max(phrase_count - 1, 1)
-    gap_penalty = abs(cue_gap_ratio - phrase_gap_ratio) * 2.4
-    compression_penalty = max(0.0, 0.60 - scale) * 4.0
-    expansion_penalty = max(0.0, scale - 1.60) * 1.8
-    jump_penalty = max(0.0, cue_gap - max(phrase_gap * 4, 6)) * 0.035
+    strong_transition = _is_strong_heavy_match(previous) and _is_strong_heavy_match(current)
+    offset_recovery = phrase_gap <= 1 and _is_offset_recovery_candidate(current)
+    gap_delta = abs(cue_gap_ratio - phrase_gap_ratio)
+    gap_tolerance = 0.08 if offset_recovery else (0.05 if strong_transition else 0.03)
+    gap_penalty = max(0.0, gap_delta - gap_tolerance) * (0.55 if offset_recovery else (0.85 if strong_transition else 1.40))
+
+    compression_threshold = 0.20 if offset_recovery else (0.35 if strong_transition else 0.45)
+    expansion_threshold = 2.40 if offset_recovery else (2.10 if strong_transition else 1.90)
+    compression_penalty = max(0.0, compression_threshold - scale) * (0.45 if offset_recovery else (1.40 if strong_transition else 2.40))
+    expansion_penalty = max(0.0, scale - expansion_threshold) * (0.45 if offset_recovery else (0.80 if strong_transition else 1.10))
+
+    jump_allowance = max(phrase_gap * 9, 18 if offset_recovery else (14 if strong_transition else 10))
+    jump_penalty = max(0.0, cue_gap - jump_allowance) * (0.004 if offset_recovery else (0.008 if strong_transition else 0.015))
     return gap_penalty + compression_penalty + expansion_penalty + jump_penalty
 
 
@@ -1136,10 +1363,31 @@ def _heavy_skip_penalty(skipped_phrase_count: int) -> float:
     return skipped_phrase_count * 0.22
 
 
+def _is_strong_heavy_match(candidate: HeavyMatchCandidate) -> bool:
+    if candidate.llm_similarity is not None:
+        return candidate.llm_similarity >= 0.74
+    return candidate.similarity >= 0.74
+
+
+def _is_offset_recovery_candidate(candidate: HeavyMatchCandidate) -> bool:
+    local_similarity = candidate.llm_similarity if candidate.llm_similarity is not None else candidate.similarity
+    return local_similarity >= 0.69 and candidate.score >= 0.68
+
+
+def _heavy_anchor_bonus(candidate: HeavyMatchCandidate) -> float:
+    local_similarity = candidate.llm_similarity if candidate.llm_similarity is not None else candidate.similarity
+    if local_similarity < 0.68:
+        return 0.0
+    return min((local_similarity - 0.68) * 0.9, 0.08)
+
+
 def _heavy_boundary_penalty(candidate: HeavyMatchCandidate, cue_count: int, phrase_count: int) -> float:
     cue_ratio = candidate.subtitle_index / max(cue_count - 1, 1)
     phrase_ratio = candidate.phrase_index / max(phrase_count - 1, 1)
-    return abs(cue_ratio - phrase_ratio) * 0.60
+    divergence = abs(cue_ratio - phrase_ratio)
+    if divergence <= 0.12:
+        return 0.0
+    return (divergence - 0.12) * 0.35
 
 
 def select_monotonic_heavy_alignment(
@@ -1167,6 +1415,7 @@ def select_monotonic_heavy_alignment(
     for index, candidate in enumerate(flattened):
         best_score = (
             candidate.score
+            + _heavy_anchor_bonus(candidate)
             - _heavy_skip_penalty(candidate.phrase_index)
             - _heavy_boundary_penalty(candidate, cue_count, phrase_count)
         )
@@ -1184,6 +1433,7 @@ def select_monotonic_heavy_alignment(
             chain_score = (
                 best_scores[previous_index]
                 + candidate.score
+                + _heavy_anchor_bonus(candidate)
                 - transition_penalty
                 - _heavy_skip_penalty(skipped_phrases)
             )
@@ -1239,13 +1489,109 @@ def select_monotonic_heavy_alignment(
     return unique_selected
 
 
+def _pair_scale_is_stable(
+    left_anchor: AnchorMatch,
+    right_anchor: AnchorMatch,
+    min_anchor_scale: float,
+    max_anchor_scale: float,
+) -> bool:
+    subtitle_delta = right_anchor.subtitle_seconds - left_anchor.subtitle_seconds
+    transcript_delta = right_anchor.transcript_seconds - left_anchor.transcript_seconds
+    if subtitle_delta <= 0.0 or transcript_delta <= 0.0:
+        return False
+    scale = transcript_delta / subtitle_delta
+    return min_anchor_scale <= scale <= max_anchor_scale
+
+
+def prune_unstable_heavy_anchors(
+    anchors: List[AnchorMatch],
+    min_anchor_scale: float = 0.35,
+    max_anchor_scale: float = 2.50,
+    min_anchor_count: int = 4,
+) -> List[AnchorMatch]:
+    ordered = sorted(anchors, key=lambda anchor: anchor.subtitle_seconds)
+    if len(ordered) <= min_anchor_count:
+        return ordered
+
+    changed = True
+    while changed and len(ordered) > min_anchor_count:
+        changed = False
+        for index in range(len(ordered) - 1):
+            left_anchor = ordered[index]
+            right_anchor = ordered[index + 1]
+            if _pair_scale_is_stable(left_anchor, right_anchor, min_anchor_scale, max_anchor_scale):
+                continue
+
+            candidate_indexes: List[int] = []
+            if 0 < index < len(ordered) - 1:
+                candidate_indexes.append(index)
+            if 0 < index + 1 < len(ordered) - 1:
+                candidate_indexes.append(index + 1)
+            if not candidate_indexes:
+                return ordered
+
+            best_choice = None
+            best_key = None
+            for candidate_index in candidate_indexes:
+                trial = ordered[:candidate_index] + ordered[candidate_index + 1:]
+                locally_stable = True
+                trial_start = max(candidate_index - 1, 0)
+                trial_stop = min(candidate_index + 1, len(trial) - 1)
+                for trial_index in range(trial_start, trial_stop):
+                    if not _pair_scale_is_stable(trial[trial_index], trial[trial_index + 1], min_anchor_scale, max_anchor_scale):
+                        locally_stable = False
+                        break
+
+                similarity = ordered[candidate_index].similarity
+                is_edge_adjacent = candidate_index in (1, len(ordered) - 2)
+                choice_key = (
+                    locally_stable,
+                    not is_edge_adjacent,
+                    -similarity,
+                )
+                if best_key is None or choice_key > best_key:
+                    best_key = choice_key
+                    best_choice = candidate_index
+
+            if best_choice is None:
+                return ordered
+
+            ordered = ordered[:best_choice] + ordered[best_choice + 1:]
+            changed = True
+            break
+
+    return ordered
+
+
+def _matches_to_anchor_matches(matches: List[HeavyMatchCandidate]) -> List[AnchorMatch]:
+    anchors: List[AnchorMatch] = []
+    seen_subtitle_ranges = set()
+    for index, match in enumerate(matches, start=1):
+        subtitle_range = (match.subtitle_index, match.subtitle_end_index)
+        if subtitle_range in seen_subtitle_ranges:
+            continue
+        seen_subtitle_ranges.add(subtitle_range)
+        anchors.append(
+            AnchorMatch(
+                window_name=f'heavy_{index}',
+                transcript_text='',
+                transcript_seconds=match.transcript_seconds,
+                subtitle_index=match.subtitle_index + 1,
+                subtitle_seconds=match.subtitle_seconds,
+                similarity=match.similarity,
+            )
+        )
+    return anchors
+
+
 def thin_heavy_alignment_to_anchors(
     matches: List[HeavyMatchCandidate],
-    cue_windows: List[SlidingCueWindow],
+    cue_windows: Optional[List[SlidingCueWindow]] = None,
     target_anchor_count: int = 10,
     preserve_similarity: float = 0.80,
     preserve_initial_count: int = 8,
 ) -> List[AnchorMatch]:
+    del cue_windows
     if len(matches) < 2:
         raise SubtitleSyncError('Heavy path needs at least two matches to create anchors')
 
@@ -1280,27 +1626,11 @@ def thin_heavy_alignment_to_anchors(
         seen_pairs.add(pair)
         merged_matches.append(match)
 
-    cue_text_by_range = {
-        (window.start_index, window.end_index): window.normalized_text
-        for window in cue_windows
-    }
-    anchors: List[AnchorMatch] = []
-    seen_subtitle_ranges = set()
-    for index, match in enumerate(merged_matches, start=1):
-        subtitle_range = (match.subtitle_index, match.subtitle_end_index)
-        if subtitle_range in seen_subtitle_ranges:
-            continue
-        seen_subtitle_ranges.add(subtitle_range)
-        anchors.append(
-            AnchorMatch(
-                window_name=f'heavy_{index}',
-                transcript_text=cue_text_by_range.get(subtitle_range, ''),
-                transcript_seconds=match.transcript_seconds,
-                subtitle_index=match.subtitle_index + 1,
-                subtitle_seconds=match.subtitle_seconds,
-                similarity=match.similarity,
-            )
-        )
+    anchors = prune_unstable_heavy_anchors(_matches_to_anchor_matches(merged_matches))
+    try:
+        validate_heavy_anchor_stability(anchors)
+    except SubtitleSyncError:
+        anchors = prune_unstable_heavy_anchors(_matches_to_anchor_matches(ordered))
 
     if len(anchors) < 4:
         raise SubtitleSyncError('Heavy path did not retain enough anchors after thinning')
@@ -1438,16 +1768,22 @@ def heavy_plan_sync(
     chunk_minutes: int,
     transcription_config: Optional[WhisperTranscriptionConfig] = None,
     matching_config: Optional[SyncMatchingConfig] = None,
+    heavy_config: Optional[HeavySyncConfig] = None,
 ) -> tuple[SyncPlan, List[AnchorMatch]]:
     transcription_config = transcription_config or default_whisper_transcription_config()
     matching_config = matching_config or default_sync_matching_config()
+    heavy_config = heavy_config or default_heavy_sync_config()
 
     subtitle_language_alpha2, subtitle_language_alpha3 = parse_subtitle_language(subtitle_path)
     metadata = probe_video_metadata(video_path)
     audio_stream = select_audio_stream(metadata, subtitle_language_alpha3)
     cues = load_normalized_cues(subtitle_path)
-    cue_windows = build_sliding_windows(cues, max_window_size=matching_config.anchor_max_window_size)
-    transcript_segments = build_full_transcript_segments(
+    cue_windows = build_sliding_windows(
+        cues,
+        max_window_size=matching_config.anchor_max_window_size,
+        max_gap_seconds=heavy_config.max_cue_gap_seconds,
+    )
+    transcript_segments, _voice_segments = build_full_transcript_segments(
         video_path=video_path,
         stream_index=audio_stream.index,
         duration_seconds=metadata.duration_seconds,
@@ -1457,8 +1793,10 @@ def heavy_plan_sync(
     )
     phrases = build_heavy_transcript_phrases(
         transcript_segments,
+        step_segments=heavy_config.step_segments,
         max_phrase_segments=matching_config.anchor_max_phrase_segments,
         min_text_length=matching_config.anchor_min_text_length,
+        max_gap_seconds=heavy_config.max_transcript_gap_seconds,
     )
     search_radius = max(len(cues) // 12, 70)
     candidate_lists = [
@@ -1469,6 +1807,7 @@ def heavy_plan_sync(
             phrase_count=len(phrases),
             matching_config=matching_config,
             search_radius=search_radius,
+            heavy_config=heavy_config,
         )
         for phrase in phrases
     ]
@@ -1478,7 +1817,7 @@ def heavy_plan_sync(
         candidate_lists,
     )
     aligned_matches = select_monotonic_heavy_alignment(phrases, len(cues), candidate_lists)
-    anchors = thin_heavy_alignment_to_anchors(aligned_matches, cue_windows)
+    anchors = thin_heavy_alignment_to_anchors(aligned_matches)
     validate_heavy_anchor_stability(anchors)
     baseline = build_global_baseline(anchors)
     sample_windows = build_full_transcription_windows(metadata.duration_seconds, chunk_minutes)
@@ -1503,6 +1842,7 @@ def heavy_sync_subtitle_file(
     output_path: Optional[str] = None,
     transcription_config: Optional[WhisperTranscriptionConfig] = None,
     matching_config: Optional[SyncMatchingConfig] = None,
+    heavy_config: Optional[HeavySyncConfig] = None,
 ) -> SyncResult:
     logger.info(
         'subtitle_sync: heavy sync start video=%s subtitle=%s chunk_minutes=%s output_override=%s',
@@ -1517,6 +1857,7 @@ def heavy_sync_subtitle_file(
         chunk_minutes=chunk_minutes,
         transcription_config=transcription_config,
         matching_config=matching_config,
+        heavy_config=heavy_config,
     )
     resolved_output = output_path or build_output_path(subtitle_path)
     apply_piecewise_transform(subtitle_path, resolved_output, anchors, enforce_baseline_guard=False)
@@ -1531,6 +1872,7 @@ def sync_subtitle_file(
     output_path: Optional[str] = None,
     transcription_config: Optional[WhisperTranscriptionConfig] = None,
     matching_config: Optional[SyncMatchingConfig] = None,
+    heavy_config: Optional[HeavySyncConfig] = None,
     metadata_provider: Callable[[str], VideoMetadata] = probe_video_metadata,
     audio_extractor: Callable[[str, int, AudioSampleWindow, str], str] = extract_audio_window,
     transcriber: Callable[[str, str, Optional[WhisperTranscriptionConfig]], List[TranscriptSegment]] = transcribe_audio,
@@ -1543,4 +1885,5 @@ def sync_subtitle_file(
         output_path=output_path,
         transcription_config=transcription_config,
         matching_config=matching_config,
+        heavy_config=heavy_config,
     )

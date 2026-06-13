@@ -362,6 +362,28 @@
                 <input id="syncAnchorMinTextLengthInput" type="number" min="1" max="200" step="1" value="18" />
             </div>
 
+            <div class="row">
+                <label for="syncHeavyEmbeddingModelInput">Heavy embedding model</label>
+                <input id="syncHeavyEmbeddingModelInput" type="text" placeholder="intfloat/multilingual-e5-small" />
+                <div class="small muted">Sentence-Transformers model used for semantic heavy-sync matching.</div>
+            </div>
+
+            <div class="row">
+                <label for="syncHeavyMaxCueGapSecondsInput">Max subtitle cue gap in seconds</label>
+                <input id="syncHeavyMaxCueGapSecondsInput" type="number" min="0" max="30" step="0.1" value="3.5" />
+            </div>
+
+            <div class="row">
+                <label for="syncHeavyMaxTranscriptGapSecondsInput">Max transcript gap in seconds</label>
+                <input id="syncHeavyMaxTranscriptGapSecondsInput" type="number" min="0" max="30" step="0.1" value="3.5" />
+            </div>
+
+            <div class="row">
+                <label for="syncHeavyStepSegmentsInput">Transcript step segments</label>
+                <input id="syncHeavyStepSegmentsInput" type="number" min="1" max="16" step="1" value="1" />
+                <div class="small muted">Lower values sample the transcript more densely and may improve hard alignments.</div>
+            </div>
+
             <div class="actions">
                 <button id="saveBtn" class="btn" type="button"><i class="fas fa-save"></i> Save</button>
                 <span id="statusMsg" class="status muted"></span>

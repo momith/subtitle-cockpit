@@ -265,6 +265,10 @@ def _default_settings():
         'sync_anchor_min_text_length': 18,
         'sync_max_scale_delta': 0.08,
         'sync_max_end_error_seconds': 1.0,
+        'sync_heavy_embedding_model': 'intfloat/multilingual-e5-small',
+        'sync_heavy_max_cue_gap_seconds': 3.5,
+        'sync_heavy_max_transcript_gap_seconds': 3.5,
+        'sync_heavy_step_segments': 1,
         'provider': 'DeepL',
         'translation_target_language': '',
         'ocr_source_language': 'eng',
@@ -472,6 +476,9 @@ def read_settings():
             sync_anchor_min_text_length = _parse_int_setting(data.get('sync_anchor_min_text_length'), base.get('sync_anchor_min_text_length', 18), 1, 200)
             sync_max_scale_delta = _parse_float_setting(data.get('sync_max_scale_delta'), base.get('sync_max_scale_delta', 0.08), 0.0, 0.5)
             sync_max_end_error_seconds = _parse_float_setting(data.get('sync_max_end_error_seconds'), base.get('sync_max_end_error_seconds', 1.0), 0.0, 10.0)
+            sync_heavy_max_cue_gap_seconds = _parse_float_setting(data.get('sync_heavy_max_cue_gap_seconds'), base.get('sync_heavy_max_cue_gap_seconds', 3.5), 0.0, 30.0)
+            sync_heavy_max_transcript_gap_seconds = _parse_float_setting(data.get('sync_heavy_max_transcript_gap_seconds'), base.get('sync_heavy_max_transcript_gap_seconds', 3.5), 0.0, 30.0)
+            sync_heavy_step_segments = _parse_int_setting(data.get('sync_heavy_step_segments'), base.get('sync_heavy_step_segments', 1), 1, 16)
             return {
                 'root_dir': root_dir,
                 'mullvad_vpn_config_dir': mullvad_vpn_config_dir,
@@ -498,6 +505,10 @@ def read_settings():
                 'sync_anchor_min_text_length': sync_anchor_min_text_length,
                 'sync_max_scale_delta': sync_max_scale_delta,
                 'sync_max_end_error_seconds': sync_max_end_error_seconds,
+                'sync_heavy_embedding_model': str(data.get('sync_heavy_embedding_model', base.get('sync_heavy_embedding_model', 'intfloat/multilingual-e5-small')) or 'intfloat/multilingual-e5-small'),
+                'sync_heavy_max_cue_gap_seconds': sync_heavy_max_cue_gap_seconds,
+                'sync_heavy_max_transcript_gap_seconds': sync_heavy_max_transcript_gap_seconds,
+                'sync_heavy_step_segments': sync_heavy_step_segments,
                 'provider': provider,
                 'translation_target_language': translation_target_language,
                 'ocr_source_language': ocr_source_language,
@@ -681,6 +692,10 @@ def api_settings():
     sync_anchor_min_text_length = _parse_int_setting(payload.get('sync_anchor_min_text_length', existing.get('sync_anchor_min_text_length', 18)), existing.get('sync_anchor_min_text_length', 18), 1, 200)
     sync_max_scale_delta = _parse_float_setting(payload.get('sync_max_scale_delta', existing.get('sync_max_scale_delta', 0.08)), existing.get('sync_max_scale_delta', 0.08), 0.0, 0.5)
     sync_max_end_error_seconds = _parse_float_setting(payload.get('sync_max_end_error_seconds', existing.get('sync_max_end_error_seconds', 1.0)), existing.get('sync_max_end_error_seconds', 1.0), 0.0, 10.0)
+    sync_heavy_embedding_model = str(payload.get('sync_heavy_embedding_model', existing.get('sync_heavy_embedding_model', 'intfloat/multilingual-e5-small')) or 'intfloat/multilingual-e5-small')
+    sync_heavy_max_cue_gap_seconds = _parse_float_setting(payload.get('sync_heavy_max_cue_gap_seconds', existing.get('sync_heavy_max_cue_gap_seconds', 3.5)), existing.get('sync_heavy_max_cue_gap_seconds', 3.5), 0.0, 30.0)
+    sync_heavy_max_transcript_gap_seconds = _parse_float_setting(payload.get('sync_heavy_max_transcript_gap_seconds', existing.get('sync_heavy_max_transcript_gap_seconds', 3.5)), existing.get('sync_heavy_max_transcript_gap_seconds', 3.5), 0.0, 30.0)
+    sync_heavy_step_segments = _parse_int_setting(payload.get('sync_heavy_step_segments', existing.get('sync_heavy_step_segments', 1)), existing.get('sync_heavy_step_segments', 1), 1, 16)
 
     new_settings = {
         'root_dir': root_dir,
@@ -708,6 +723,10 @@ def api_settings():
         'sync_anchor_min_text_length': sync_anchor_min_text_length,
         'sync_max_scale_delta': sync_max_scale_delta,
         'sync_max_end_error_seconds': sync_max_end_error_seconds,
+        'sync_heavy_embedding_model': sync_heavy_embedding_model,
+        'sync_heavy_max_cue_gap_seconds': sync_heavy_max_cue_gap_seconds,
+        'sync_heavy_max_transcript_gap_seconds': sync_heavy_max_transcript_gap_seconds,
+        'sync_heavy_step_segments': sync_heavy_step_segments,
         'provider': provider,
         'translation_target_language': translation_target_language,
         'ocr_source_language': ocr_source_language,

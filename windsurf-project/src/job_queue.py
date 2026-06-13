@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Callable
 import subprocess
 import os
-from subtitle_sync import SubtitleSyncError, SyncMatchingConfig, WhisperTranscriptionConfig, sync_subtitle_file
+from subtitle_sync import HeavySyncConfig, SubtitleSyncError, SyncMatchingConfig, WhisperTranscriptionConfig, sync_subtitle_file
 
 # Job status constants
 STATUS_PENDING = 'pending'
@@ -773,6 +773,12 @@ class JobQueue:
             max_scale_delta=max(float(settings.get('sync_max_scale_delta', 0.08) or 0.08), 0.0),
             max_end_error_seconds=max(float(settings.get('sync_max_end_error_seconds', 1.0) or 1.0), 0.0),
         )
+        heavy_config = HeavySyncConfig(
+            embedding_model_name=str(settings.get('sync_heavy_embedding_model', 'intfloat/multilingual-e5-small') or 'intfloat/multilingual-e5-small'),
+            max_cue_gap_seconds=max(float(settings.get('sync_heavy_max_cue_gap_seconds', 3.5) or 3.5), 0.0),
+            max_transcript_gap_seconds=max(float(settings.get('sync_heavy_max_transcript_gap_seconds', 3.5) or 3.5), 0.0),
+            step_segments=max(int(settings.get('sync_heavy_step_segments', 1) or 1), 1),
+        )
 
         logging.info(
             'Job sync_subtitles starting subtitle=%s video=%s sample_minutes=%s settings_file=%s model=%s device=%s compute_type=%s cpu_threads=%s num_workers=%s beam_size=%s best_of=%s',
@@ -796,6 +802,7 @@ class JobQueue:
                 sample_minutes=sample_minutes,
                 transcription_config=transcription_config,
                 matching_config=matching_config,
+                heavy_config=heavy_config,
             )
         except SubtitleSyncError as exc:
             raise RuntimeError(str(exc)) from exc

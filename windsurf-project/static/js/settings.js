@@ -58,6 +58,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const syncAnchorMinTextLengthInput = document.getElementById('syncAnchorMinTextLengthInput');
   const syncMaxScaleDeltaInput = document.getElementById('syncMaxScaleDeltaInput');
   const syncMaxEndErrorSecondsInput = document.getElementById('syncMaxEndErrorSecondsInput');
+  const syncHeavyEmbeddingModelInput = document.getElementById('syncHeavyEmbeddingModelInput');
+  const syncHeavyMaxCueGapSecondsInput = document.getElementById('syncHeavyMaxCueGapSecondsInput');
+  const syncHeavyMaxTranscriptGapSecondsInput = document.getElementById('syncHeavyMaxTranscriptGapSecondsInput');
+  const syncHeavyStepSegmentsInput = document.getElementById('syncHeavyStepSegmentsInput');
 
   let allowedProviders = [];
   let currentSettings = null;
@@ -173,6 +177,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (syncAnchorMinTextLengthInput) syncAnchorMinTextLengthInput.value = Number(currentSettings.sync_anchor_min_text_length || 18);
     if (syncMaxScaleDeltaInput) syncMaxScaleDeltaInput.value = Number(currentSettings.sync_max_scale_delta ?? 0.08);
     if (syncMaxEndErrorSecondsInput) syncMaxEndErrorSecondsInput.value = Number(currentSettings.sync_max_end_error_seconds ?? 1.0);
+    if (syncHeavyEmbeddingModelInput) syncHeavyEmbeddingModelInput.value = currentSettings.sync_heavy_embedding_model || 'intfloat/multilingual-e5-small';
+    if (syncHeavyMaxCueGapSecondsInput) syncHeavyMaxCueGapSecondsInput.value = Number(currentSettings.sync_heavy_max_cue_gap_seconds ?? 3.5);
+    if (syncHeavyMaxTranscriptGapSecondsInput) syncHeavyMaxTranscriptGapSecondsInput.value = Number(currentSettings.sync_heavy_max_transcript_gap_seconds ?? 3.5);
+    if (syncHeavyStepSegmentsInput) syncHeavyStepSegmentsInput.value = Number(currentSettings.sync_heavy_step_segments || 1);
     renderGlobals();
     await loadVpnConfigs();
     renderKeysSection();
@@ -522,7 +530,11 @@ document.addEventListener('DOMContentLoaded', () => {
       sync_anchor_max_phrase_segments: Number(syncAnchorMaxPhraseSegmentsInput ? (syncAnchorMaxPhraseSegmentsInput.value || 3) : 3),
       sync_anchor_min_text_length: Number(syncAnchorMinTextLengthInput ? (syncAnchorMinTextLengthInput.value || 18) : 18),
       sync_max_scale_delta: Number(syncMaxScaleDeltaInput ? (syncMaxScaleDeltaInput.value || 0.08) : 0.08),
-      sync_max_end_error_seconds: Number(syncMaxEndErrorSecondsInput ? (syncMaxEndErrorSecondsInput.value || 1.0) : 1.0)
+      sync_max_end_error_seconds: Number(syncMaxEndErrorSecondsInput ? (syncMaxEndErrorSecondsInput.value || 1.0) : 1.0),
+      sync_heavy_embedding_model: (syncHeavyEmbeddingModelInput ? (syncHeavyEmbeddingModelInput.value || 'intfloat/multilingual-e5-small').trim() : 'intfloat/multilingual-e5-small'),
+      sync_heavy_max_cue_gap_seconds: Number(syncHeavyMaxCueGapSecondsInput ? (syncHeavyMaxCueGapSecondsInput.value || 3.5) : 3.5),
+      sync_heavy_max_transcript_gap_seconds: Number(syncHeavyMaxTranscriptGapSecondsInput ? (syncHeavyMaxTranscriptGapSecondsInput.value || 3.5) : 3.5),
+      sync_heavy_step_segments: Number(syncHeavyStepSegmentsInput ? (syncHeavyStepSegmentsInput.value || 1) : 1)
     };
     try {
       const res = await fetch('/api/settings', {
@@ -584,6 +596,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (syncAnchorMinTextLengthInput) syncAnchorMinTextLengthInput.value = Number(currentSettings.sync_anchor_min_text_length || 18);
         if (syncMaxScaleDeltaInput) syncMaxScaleDeltaInput.value = Number(currentSettings.sync_max_scale_delta ?? 0.08);
         if (syncMaxEndErrorSecondsInput) syncMaxEndErrorSecondsInput.value = Number(currentSettings.sync_max_end_error_seconds ?? 1.0);
+        if (syncHeavyEmbeddingModelInput) syncHeavyEmbeddingModelInput.value = currentSettings.sync_heavy_embedding_model || 'intfloat/multilingual-e5-small';
+        if (syncHeavyMaxCueGapSecondsInput) syncHeavyMaxCueGapSecondsInput.value = Number(currentSettings.sync_heavy_max_cue_gap_seconds ?? 3.5);
+        if (syncHeavyMaxTranscriptGapSecondsInput) syncHeavyMaxTranscriptGapSecondsInput.value = Number(currentSettings.sync_heavy_max_transcript_gap_seconds ?? 3.5);
+        if (syncHeavyStepSegmentsInput) syncHeavyStepSegmentsInput.value = Number(currentSettings.sync_heavy_step_segments || 1);
         await loadVpnConfigs();
         renderKeysSection();
         setStatus('Saved');
