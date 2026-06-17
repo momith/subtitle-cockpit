@@ -592,9 +592,16 @@ def select_audio_stream(metadata: VideoMetadata, subtitle_language_alpha3: str) 
     for stream in metadata.audio_streams:
         if stream.language_alpha3 and stream.language_alpha3.lower() == subtitle_language_alpha3.lower():
             return stream
-    raise SubtitleSyncError(
-        f'No audio stream found for subtitle language {subtitle_language_alpha3}'
-    )
+    if metadata.audio_streams:
+        fallback_stream = metadata.audio_streams[0]
+        logger.warning(
+            'subtitle_sync: no audio stream matched subtitle language %s, falling back to first audio stream index=%s language=%s',
+            subtitle_language_alpha3,
+            fallback_stream.index,
+            fallback_stream.language_raw,
+        )
+        return fallback_stream
+    raise SubtitleSyncError('No audio streams found in video file')
 
 
 def extract_audio_window(video_path: str, stream_index: int, window: AudioSampleWindow, temp_dir: str) -> str:

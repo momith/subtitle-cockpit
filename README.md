@@ -70,7 +70,7 @@ The application is intended to run on the same server as a Plex/Emby/other media
 
 ## Naming conventions (important)
 
-Subtitle Cockpit relies heavily on file naming to infer metadata (especially for subtitle search and publishing). You will get the best results when your filenames contain as much structured information as possible.
+Subtitle Cockpit relies heavily on file naming to infer metadata (especially for subtitle search, subtitle sync and publishing). You will get the best results when your filenames contain as much structured information as possible. For example in case of subtitle sync it will try to find an audiotrack with the according language based on the 2-character-language-code the subtitle file name suffix.  
 
 - **Video files**
   - Include the **movie/series name**.
