@@ -70,9 +70,73 @@ document.addEventListener('DOMContentLoaded', function() {
     let appSettings = {};
     let uploadInProgress = false;
     let copyListPaths = [];
+    let activeFileOperation = null;
+
+    const fileOperationButtons = {
+        paste: pasteBtn,
+        download: downloadBtn,
+        upload: uploadBtn
+    };
+
+    const fileOperationLabels = {
+        paste: '<i class="fas fa-paste"></i> Paste',
+        download: '<i class="fas fa-download"></i> Download',
+        upload: '<i class="fas fa-upload"></i> Upload'
+    };
 
     function clearCopyList() {
         copyListPaths = [];
+        updateActionButton();
+    }
+
+    function isFileOperationActive() {
+        return !!activeFileOperation;
+    }
+
+    function setFileOperationBusy(operation, busyLabel) {
+        const button = fileOperationButtons[operation];
+        if (!button) return;
+        button.disabled = true;
+        button.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${busyLabel}`;
+    }
+
+    function resetFileOperationButton(operation) {
+        const button = fileOperationButtons[operation];
+        if (!button) return;
+        button.innerHTML = fileOperationLabels[operation] || button.innerHTML;
+    }
+
+    function startFileOperation(operation, busyLabel, toastMessage) {
+        if (activeFileOperation) {
+            showToast('Another file operation is already in progress. Please wait.', 'warning', 3500);
+            return false;
+        }
+
+        activeFileOperation = operation;
+        setFileOperationBusy(operation, busyLabel);
+        updateActionButton();
+
+        if (toastMessage) {
+            showToast(toastMessage, 'info', 5000);
+        }
+
+        return true;
+    }
+
+    function updateActiveFileOperationLabel(busyLabel) {
+        if (!activeFileOperation) return;
+        setFileOperationBusy(activeFileOperation, busyLabel);
+    }
+
+    function finishFileOperation(operation) {
+        if (activeFileOperation !== operation) {
+            resetFileOperationButton(operation);
+            updateActionButton();
+            return;
+        }
+
+        resetFileOperationButton(operation);
+        activeFileOperation = null;
         updateActionButton();
     }
 
@@ -574,6 +638,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const anySelected = selectedFiles.size > 0;
         const oneSelected = selectedFiles.size === 1;
         const multiSelected = selectedFiles.size > 1;
+        const fileOperationBusy = isFileOperationActive();
+
         if (addToCopyListBtn) {
             addToCopyListBtn.disabled = !anySelected;
         }
@@ -581,7 +647,7 @@ document.addEventListener('DOMContentLoaded', function() {
             clearCopyListBtn.disabled = copyListPaths.length === 0;
         }
         if (pasteBtn) {
-            pasteBtn.disabled = copyListPaths.length === 0;
+            pasteBtn.disabled = fileOperationBusy || copyListPaths.length === 0;
         }
         deleteBtn.disabled = !anySelected;
         if (renameBtn) {
@@ -605,7 +671,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const it = currentItems.find(x => x.path === p);
                 return it && !it.is_dir;
             });
-            downloadBtn.disabled = !allAreFiles;
+            downloadBtn.disabled = fileOperationBusy || !allAreFiles;
         }
         if (extractBtn) {
             const arr = Array.from(selectedFiles);
@@ -636,6 +702,12 @@ document.addEventListener('DOMContentLoaded', function() {
             const arr = Array.from(selectedFiles);
             const allPublishable = anySelected && arr.every(isPublishableSubtitle);
             publishSubtitlesBtn.disabled = !allPublishable;
+        }
+        if (uploadBtn) {
+            uploadBtn.disabled = fileOperationBusy;
+            if (activeFileOperation === 'upload') {
+                setFileOperationBusy('upload', uploadBtn.textContent.trim() || 'Uploading...');
+            }
         }
     }
 
@@ -743,6 +815,12 @@ document.addEventListener('DOMContentLoaded', function() {
         pasteBtn.addEventListener('click', async () => {
             if (pasteBtn.disabled || copyListPaths.length === 0) return;
             const queuedItemCount = copyListPaths.length;
+            const started = startFileOperation(
+                'paste',
+                `Pasting ${queuedItemCount} item(s)...`,
+                `Pasting ${queuedItemCount} item(s). Please stay on this page.`
+            );
+            if (!started) return;
             try {
                 const res = await fetch('/api/paste', {
                     method: 'POST',
@@ -763,6 +841,8 @@ document.addEventListener('DOMContentLoaded', function() {
             } catch (e) {
                 console.error('Paste error', e);
                 showToast('Paste failed. See console for details.', 'error');
+            } finally {
+                finishFileOperation('paste');
             }
         });
     }
@@ -1318,10 +1398,15 @@ document.addEventListener('DOMContentLoaded', function() {
             const filePath = selected[0];
             const fileName = filePath.split('/').pop();
             const downloadName = isBulk ? 'download.zip' : fileName;
+            const busyLabel = isBulk ? 'Preparing ZIP download...' : 'Preparing download...';
+            const started = startFileOperation(
+                'download',
+                busyLabel,
+                `Preparing ${isBulk ? 'ZIP download' : 'download'}. Please stay on this page.`
+            );
+            if (!started) return;
             
             try {
-                showToast(`Downloading ${isBulk ? selected.length + ' files' : fileName}...`, 'info', 3000);
-
                 const response = await fetch(isBulk ? '/api/download_bulk' : '/api/download', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1350,6 +1435,8 @@ document.addEventListener('DOMContentLoaded', function() {
             } catch (e) {
                 console.error('Download error:', e);
                 showToast(`Download failed: ${e.message}`, 'error', 5000);
+            } finally {
+                finishFileOperation('download');
             }
         });
     }
@@ -1426,8 +1513,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // Upload button handler
     if (uploadBtn && uploadFileInput) {
         uploadBtn.addEventListener('click', () => {
-            if (uploadInProgress) {
-                showToast('Upload already in progress', 'warning', 3000);
+            if (uploadInProgress || isFileOperationActive()) {
+                showToast('A file operation is already in progress. Please wait.', 'warning', 3000);
                 return;
             }
             uploadFileInput.click();
@@ -1437,23 +1524,28 @@ document.addEventListener('DOMContentLoaded', function() {
             const files = Array.from(e.target.files);
             if (files.length === 0) return;
             
-            if (uploadInProgress) {
-                showToast('Upload already in progress', 'warning', 3000);
+            if (uploadInProgress || isFileOperationActive()) {
+                showToast('A file operation is already in progress. Please wait.', 'warning', 3000);
                 uploadFileInput.value = '';
                 return;
             }
             
             try {
-                uploadInProgress = true;
-                uploadBtn.disabled = true;
-                uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
-                
                 const totalFiles = files.length;
+                const started = startFileOperation(
+                    'upload',
+                    'Uploading...',
+                    `Uploading ${totalFiles} file(s). Please stay on this page.`
+                );
+                if (!started) {
+                    uploadFileInput.value = '';
+                    return;
+                }
+
+                uploadInProgress = true;
                 let successCount = 0;
                 let failCount = 0;
                 const errors = [];
-                
-                showToast(`Uploading ${totalFiles} file(s)...Do not leave this page!`, 'info', 6000);
 
                 setUploadProgressVisible(true);
                 
@@ -1462,7 +1554,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     const file = files[i];
                     
                     try {
-                        uploadBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Uploading ${i + 1}/${totalFiles}...`;
+                        updateActiveFileOperationLabel(`Uploading ${i + 1}/${totalFiles}...`);
 
                         updateUploadProgress(`Uploading ${file.name} (${i + 1}/${totalFiles})`, 0);
 
@@ -1517,8 +1609,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 setUploadProgressVisible(false);
                 updateUploadProgress('', 0);
                 uploadInProgress = false;
-                uploadBtn.disabled = false;
-                uploadBtn.innerHTML = '<i class="fas fa-upload"></i> Upload';
+                finishFileOperation('upload');
                 uploadFileInput.value = '';
             }
         });
