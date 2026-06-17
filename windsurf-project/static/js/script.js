@@ -5,7 +5,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const refreshBtn = document.getElementById('refreshBtn');
     const newFolderBtn = document.getElementById('newFolderBtn');
     const renameBtn = document.getElementById('renameBtn');
-    const copyBtn = document.getElementById('copyBtn');
+    const addToCopyListBtn = document.getElementById('addToCopyListBtn');
+    const clearCopyListBtn = document.getElementById('clearCopyListBtn');
     const pasteBtn = document.getElementById('pasteBtn');
     const bulkEditBtn = document.getElementById('bulkEditBtn');
     const deleteBtn = document.getElementById('deleteBtn');
@@ -68,7 +69,29 @@ document.addEventListener('DOMContentLoaded', function() {
     let excludedFileTypes = new Set();
     let appSettings = {};
     let uploadInProgress = false;
-    let clipboardPaths = [];
+    let copyListPaths = [];
+
+    function clearCopyList() {
+        copyListPaths = [];
+        updateActionButton();
+    }
+
+    function addSelectedItemsToCopyList() {
+        const existingPaths = new Set(copyListPaths);
+        let addedCount = 0;
+
+        Array.from(selectedFiles).forEach(path => {
+            if (existingPaths.has(path)) {
+                return;
+            }
+            existingPaths.add(path);
+            copyListPaths.push(path);
+            addedCount += 1;
+        });
+
+        updateActionButton();
+        return addedCount;
+    }
 
     function applyDirectoryPayload(data) {
         currentPath = data.path;
@@ -551,11 +574,14 @@ document.addEventListener('DOMContentLoaded', function() {
         const anySelected = selectedFiles.size > 0;
         const oneSelected = selectedFiles.size === 1;
         const multiSelected = selectedFiles.size > 1;
-        if (copyBtn) {
-            copyBtn.disabled = !anySelected;
+        if (addToCopyListBtn) {
+            addToCopyListBtn.disabled = !anySelected;
+        }
+        if (clearCopyListBtn) {
+            clearCopyListBtn.disabled = copyListPaths.length === 0;
         }
         if (pasteBtn) {
-            pasteBtn.disabled = clipboardPaths.length === 0;
+            pasteBtn.disabled = copyListPaths.length === 0;
         }
         deleteBtn.disabled = !anySelected;
         if (renameBtn) {
@@ -693,24 +719,36 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    if (copyBtn) {
-        copyBtn.addEventListener('click', () => {
-            if (copyBtn.disabled || selectedFiles.size === 0) return;
-            clipboardPaths = Array.from(selectedFiles);
-            updateActionButton();
-            showToast(`Copied ${clipboardPaths.length} item(s).`, 'success', 2500);
+    if (addToCopyListBtn) {
+        addToCopyListBtn.addEventListener('click', () => {
+            if (addToCopyListBtn.disabled || selectedFiles.size === 0) return;
+            const addedCount = addSelectedItemsToCopyList();
+            if (addedCount === 0) {
+                showToast(`All ${selectedFiles.size} selected item(s) are already in the copy list.`, 'info', 2500);
+                return;
+            }
+            showToast(`Added ${addedCount} item(s) to the copy list.`, 'success', 2500);
+        });
+    }
+
+    if (clearCopyListBtn) {
+        clearCopyListBtn.addEventListener('click', () => {
+            if (clearCopyListBtn.disabled || copyListPaths.length === 0) return;
+            clearCopyList();
+            showToast('Copy list cleared.', 'info', 2500);
         });
     }
 
     if (pasteBtn) {
         pasteBtn.addEventListener('click', async () => {
-            if (pasteBtn.disabled || clipboardPaths.length === 0) return;
+            if (pasteBtn.disabled || copyListPaths.length === 0) return;
+            const queuedItemCount = copyListPaths.length;
             try {
                 const res = await fetch('/api/paste', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        paths: clipboardPaths,
+                        paths: copyListPaths,
                         target_dir: currentPath || ''
                     })
                 });
@@ -719,7 +757,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     showToast(`Paste failed: ${data.error || 'Unknown error'}`, 'error', 7000);
                     return;
                 }
-                showToast(data.message || `Pasted ${clipboardPaths.length} item(s).`, 'success');
+                clearCopyList();
+                showToast(data.message || `Pasted ${queuedItemCount} item(s).`, 'success');
                 loadDirectory(currentPath || '');
             } catch (e) {
                 console.error('Paste error', e);
